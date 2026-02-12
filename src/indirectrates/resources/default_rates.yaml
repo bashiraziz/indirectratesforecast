@@ -1,0 +1,28 @@
+period_granularity: month
+
+base_definitions:
+  DL: DirectLabor$
+  DLH: DirectLaborHrs
+  TL: DirectLabor$
+  TCI:
+    sum:
+      - DirectLabor$
+      - Subk
+      - ODC
+      - Travel
+
+rates:
+  Fringe:
+    pool: ["Fringe"]
+    base: "TL"
+    cascade_order: 0
+  Overhead:
+    pool: ["Overhead"]
+    base: "DL"
+    cascade_order: 1
+  G&A:
+    pool: ["G&A"]
+    base: "TCI"
+    cascade_order: 2
+
+unallowable_pool_names: ["Unallowable"]
