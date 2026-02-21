@@ -21,26 +21,34 @@ FY_END = "2025-09"
 RATE_GROUP_NAME = "Standard Rate Structure"
 
 CHART_OF_ACCOUNTS = [
-    {"account": "5001", "name": "Direct Labor - Engineers", "category": "Labor"},
-    {"account": "5002", "name": "Direct Labor - Analysts", "category": "Labor"},
-    {"account": "5003", "name": "Direct Labor - Admin", "category": "Labor"},
-    {"account": "6001", "name": "Health Insurance", "category": "Fringe"},
-    {"account": "6002", "name": "401k Match", "category": "Fringe"},
-    {"account": "6003", "name": "Payroll Taxes", "category": "Fringe"},
-    {"account": "6004", "name": "Workers Comp", "category": "Fringe"},
-    {"account": "6101", "name": "Rent", "category": "Overhead"},
-    {"account": "6102", "name": "Utilities", "category": "Overhead"},
-    {"account": "6103", "name": "IT Equipment & Software", "category": "Overhead"},
-    {"account": "6104", "name": "Office Supplies", "category": "Overhead"},
-    {"account": "6105", "name": "Depreciation", "category": "Overhead"},
-    {"account": "7001", "name": "Executive Salaries", "category": "G&A"},
-    {"account": "7002", "name": "Accounting & Finance", "category": "G&A"},
-    {"account": "7003", "name": "HR & Admin", "category": "G&A"},
-    {"account": "7004", "name": "Business Development", "category": "G&A"},
-    {"account": "7005", "name": "General Insurance", "category": "G&A"},
-    {"account": "8001", "name": "Travel", "category": "Direct"},
-    {"account": "8002", "name": "Subcontracts", "category": "Direct"},
-    {"account": "8003", "name": "ODC / Materials", "category": "Direct"},
+    # 5xxx — Direct costs
+    {"account": "5100.01", "name": "Direct Labor - Engineers", "category": "Direct"},
+    {"account": "5100.02", "name": "Direct Labor - Analysts", "category": "Direct"},
+    {"account": "5100.03", "name": "Direct Labor - Admin", "category": "Direct"},
+    {"account": "5200.01", "name": "Travel", "category": "Direct"},
+    {"account": "5300.01", "name": "Subcontracts", "category": "Direct"},
+    {"account": "5400.01", "name": "ODC / Materials", "category": "Direct"},
+    # 6xxx — Fringe
+    {"account": "6100.01", "name": "Health Insurance", "category": "Fringe"},
+    {"account": "6100.02", "name": "401k Match", "category": "Fringe"},
+    {"account": "6100.03", "name": "Payroll Taxes", "category": "Fringe"},
+    {"account": "6100.04", "name": "Workers Comp", "category": "Fringe"},
+    # 7xxx — Overhead
+    {"account": "7100.01", "name": "Rent", "category": "Overhead"},
+    {"account": "7100.02", "name": "Utilities", "category": "Overhead"},
+    {"account": "7100.03", "name": "IT Equipment & Software", "category": "Overhead"},
+    {"account": "7100.04", "name": "Office Supplies", "category": "Overhead"},
+    {"account": "7100.05", "name": "Depreciation", "category": "Overhead"},
+    # 8xxx — G&A
+    {"account": "8100.01", "name": "Executive Salaries", "category": "G&A"},
+    {"account": "8100.02", "name": "Accounting & Finance", "category": "G&A"},
+    {"account": "8100.03", "name": "HR & Admin", "category": "G&A"},
+    {"account": "8100.04", "name": "Business Development", "category": "G&A"},
+    {"account": "8100.05", "name": "General Insurance", "category": "G&A"},
+    # 9xxx — Unallowable
+    {"account": "9100.01", "name": "Entertainment", "category": "Unallowable"},
+    {"account": "9100.02", "name": "Alcohol", "category": "Unallowable"},
+    {"account": "9100.03", "name": "Lobbying", "category": "Unallowable"},
 ]
 
 # Pool structure: (pool_group_name, base, cascade_order, cost_accounts, base_accounts)
@@ -49,51 +57,67 @@ POOL_STRUCTURE = [
         "name": "Fringe",
         "base": "DL",
         "cascade_order": 0,
-        "cost_accounts": ["6001", "6002", "6003", "6004"],
-        "base_accounts": ["5001", "5002", "5003"],
+        "cost_accounts": ["6100.01", "6100.02", "6100.03", "6100.04"],
+        "base_accounts": ["5100.01", "5100.02", "5100.03"],
     },
     {
         "name": "Overhead",
         "base": "DL",
         "cascade_order": 1,
-        "cost_accounts": ["6101", "6102", "6103", "6104", "6105"],
-        "base_accounts": ["5001", "5002", "5003"],
+        "cost_accounts": ["7100.01", "7100.02", "7100.03", "7100.04", "7100.05"],
+        "base_accounts": ["5100.01", "5100.02", "5100.03"],
     },
     {
         "name": "G&A",
         "base": "TCI",
         "cascade_order": 2,
-        "cost_accounts": ["7001", "7002", "7003", "7004", "7005"],
-        "base_accounts": ["5001", "5002", "5003", "8001", "8002", "8003"],
+        "cost_accounts": ["8100.01", "8100.02", "8100.03", "8100.04", "8100.05"],
+        "base_accounts": ["5100.01", "5100.02", "5100.03", "5200.01", "5300.01", "5400.01"],
+    },
+    {
+        "name": "Unallowable",
+        "base": "DL",
+        "cascade_order": 3,
+        "cost_accounts": ["9100.01", "9100.02", "9100.03"],
+        "base_accounts": [],
+        "is_unallowable": True,
     },
 ]
 
 # Monthly GL amounts (base amounts with +/- variation applied per month)
 _GL_BASE_AMOUNTS: dict[str, float] = {
-    "5001": 120000,   # DL Engineers
-    "5002": 85000,    # DL Analysts
-    "5003": 45000,    # DL Admin
-    "6001": 38000,    # Health Insurance
-    "6002": 12500,    # 401k Match
-    "6003": 19000,    # Payroll Taxes
-    "6004": 3500,     # Workers Comp
-    "6101": 22000,    # Rent (fixed)
-    "6102": 4500,     # Utilities
-    "6103": 15000,    # IT Equipment
-    "6104": 3000,     # Office Supplies
-    "6105": 8000,     # Depreciation (fixed)
-    "7001": 55000,    # Exec Salaries
-    "7002": 25000,    # Accounting
-    "7003": 18000,    # HR
-    "7004": 12000,    # BD
-    "7005": 6000,     # Insurance
-    "8001": 8000,     # Travel
-    "8002": 45000,    # Subcontracts
-    "8003": 15000,    # ODC
+    # Direct
+    "5100.01": 120000,   # DL Engineers
+    "5100.02": 85000,    # DL Analysts
+    "5100.03": 45000,    # DL Admin
+    "5200.01": 8000,     # Travel
+    "5300.01": 45000,    # Subcontracts
+    "5400.01": 15000,    # ODC
+    # Fringe
+    "6100.01": 38000,    # Health Insurance
+    "6100.02": 12500,    # 401k Match
+    "6100.03": 19000,    # Payroll Taxes
+    "6100.04": 3500,     # Workers Comp
+    # Overhead
+    "7100.01": 22000,    # Rent (fixed)
+    "7100.02": 4500,     # Utilities
+    "7100.03": 15000,    # IT Equipment
+    "7100.04": 3000,     # Office Supplies
+    "7100.05": 8000,     # Depreciation (fixed)
+    # G&A
+    "8100.01": 55000,    # Exec Salaries
+    "8100.02": 25000,    # Accounting
+    "8100.03": 18000,    # HR
+    "8100.04": 12000,    # BD
+    "8100.05": 6000,     # Insurance
+    # Unallowable
+    "9100.01": 2500,     # Entertainment
+    "9100.02": 800,      # Alcohol
+    "9100.03": 1500,     # Lobbying
 }
 
 # Accounts with fixed amounts (no variation)
-_FIXED_ACCOUNTS = {"6101", "6105"}
+_FIXED_ACCOUNTS = {"7100.01", "7100.05"}
 
 PERIODS = ["2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03"]
 
@@ -146,7 +170,7 @@ def seed_test_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, 
         pg_id = db.create_pool_group(
             conn, fy_id, ps["name"],
             base=ps["base"],
-            display_order=ps["cascade_order"],
+            display_order=ps.get("display_order", ps["cascade_order"]),
             rate_group_id=rg_id,
             cascade_order=ps["cascade_order"],
         )
@@ -157,8 +181,9 @@ def seed_test_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, 
         pool_count += 1
 
         # Add cost accounts (GL mappings)
+        is_unallowable = ps.get("is_unallowable", False)
         for acct in ps["cost_accounts"]:
-            db.create_gl_mapping(conn, pool_id, acct)
+            db.create_gl_mapping(conn, pool_id, acct, is_unallowable=is_unallowable)
             gl_mapping_count += 1
 
         # Add base accounts
@@ -254,13 +279,14 @@ def _write_direct_costs(data_dir: Path, rng: random.Random) -> None:
 def _write_account_map(data_dir: Path) -> None:
     rows = []
     for ps in POOL_STRUCTURE:
+        is_unallowable = ps.get("is_unallowable", False)
         for acct in ps["cost_accounts"]:
             entry = next(a for a in CHART_OF_ACCOUNTS if a["account"] == acct)
             rows.append({
                 "Account": acct,
                 "Pool": ps["name"],
                 "BaseCategory": ps["base"],
-                "IsUnallowable": False,
+                "IsUnallowable": is_unallowable,
                 "Notes": entry["name"],
             })
 

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  AlertTriangle,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -35,6 +37,7 @@ import {
   createBaseAccount,
   deleteBaseAccount,
   copyFYSetup,
+  listChartOfAccounts,
 } from "@/lib/api";
 import type { FiscalYear, RateGroup, PoolGroup, Pool, GLMapping, ChartAccount, BaseAccount } from "@/lib/types";
 
@@ -178,12 +181,14 @@ function AccountShuttle({
   assigned,
   onAssign,
   onUnassign,
+  error,
 }: {
   title: string;
   available: ChartAccount[];
   assigned: { id: number; account: string; name?: string }[];
   onAssign: (accounts: ChartAccount[]) => Promise<void>;
   onUnassign: (ids: number[]) => Promise<void>;
+  error?: string | null;
 }) {
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedAssigned, setSelectedAssigned] = useState<Set<number>>(new Set());
@@ -326,6 +331,11 @@ function AccountShuttle({
           </div>
         </div>
       </div>
+      {error && (
+        <div className="mt-1.5 text-[11px] text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-1.5">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -339,44 +349,79 @@ function PoolGroupItem({
   isExpanded,
   onToggle,
   onRefresh,
+  poolCount,
 }: {
   pg: PoolGroup;
   fyId: number;
   isExpanded: boolean;
   onToggle: () => void;
   onRefresh: () => void;
+  poolCount: number;
 }) {
+  // --- DB state (source of truth, loaded from server) ---
   const [pools, setPools] = useState<Pool[]>([]);
-  const [costMappings, setCostMappings] = useState<GLMapping[]>([]);
-  const [baseAccts, setBaseAccts] = useState<BaseAccount[]>([]);
-  const [availableCost, setAvailableCost] = useState<ChartAccount[]>([]);
-  const [availableBase, setAvailableBase] = useState<ChartAccount[]>([]);
+  const [dbCostMappings, setDbCostMappings] = useState<GLMapping[]>([]);
+  const [dbBaseAccts, setDbBaseAccts] = useState<BaseAccount[]>([]);
+  const [dbAvailableCost, setDbAvailableCost] = useState<ChartAccount[]>([]);
+  const [dbAvailableBase, setDbAvailableBase] = useState<ChartAccount[]>([]);
+  const [coaNameMap, setCoaNameMap] = useState<Record<string, string>>({});
+
+  // --- Pending local changes (not yet saved) ---
+  const [pendingCostAdds, setPendingCostAdds] = useState<ChartAccount[]>([]);
+  const [pendingCostRemoves, setPendingCostRemoves] = useState<Set<number>>(new Set());
+  const [pendingBaseAdds, setPendingBaseAdds] = useState<ChartAccount[]>([]);
+  const [pendingBaseRemoves, setPendingBaseRemoves] = useState<Set<number>>(new Set());
+
   const [showAddPool, setShowAddPool] = useState(false);
   const [newPoolName, setNewPoolName] = useState("");
+  const [costError, setCostError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(pg.name);
   const [editBase, setEditBase] = useState(pg.base);
   const [editCascadeOrder, setEditCascadeOrder] = useState(pg.cascade_order ?? 0);
 
+  const hasPendingChanges =
+    pendingCostAdds.length > 0 ||
+    pendingCostRemoves.size > 0 ||
+    pendingBaseAdds.length > 0 ||
+    pendingBaseRemoves.size > 0;
+
+  function clearPending() {
+    setPendingCostAdds([]);
+    setPendingCostRemoves(new Set());
+    setPendingBaseAdds([]);
+    setPendingBaseRemoves(new Set());
+    setCostError(null);
+  }
+
   const loadDetails = useCallback(async () => {
     if (!isExpanded) return;
 
-    const [poolsList, baseList, costAvail, baseAvail] = await Promise.all([
+    const [poolsList, baseList, costAvail, baseAvail, coa] = await Promise.all([
       listPools(pg.id),
       listBaseAccounts(pg.id),
       getAvailableCostAccounts(fyId),
       getAvailableBaseAccounts(fyId),
+      listChartOfAccounts(fyId),
     ]);
 
     setPools(poolsList);
-    setBaseAccts(baseList);
-    setAvailableCost(costAvail);
-    setAvailableBase(baseAvail);
+    setDbBaseAccts(baseList);
+    setDbAvailableCost(costAvail);
+    setDbAvailableBase(baseAvail);
+
+    // Build account number → name lookup from full COA
+    const nameMap: Record<string, string> = {};
+    for (const a of coa) {
+      nameMap[a.account] = a.name;
+    }
+    setCoaNameMap(nameMap);
 
     // Load cost mappings from all pools
     const mappingPromises = poolsList.map((p) => listGLMappings(p.id));
     const mappingsArrays = await Promise.all(mappingPromises);
-    setCostMappings(mappingsArrays.flat());
+    setDbCostMappings(mappingsArrays.flat());
   }, [isExpanded, pg.id, fyId]);
 
   useEffect(() => {
@@ -407,58 +452,168 @@ function PoolGroupItem({
     onRefresh();
   }
 
-  // Cost account shuttle handlers
-  async function handleAssignCost(accounts: ChartAccount[]) {
-    // Assign to the first pool (or create a default one if none exist)
-    let targetPoolId: number;
-    if (pools.length === 0) {
-      const result = await createPool(pg.id, { name: pg.name });
-      targetPoolId = result.id;
-    } else {
-      targetPoolId = pools[0].id;
-    }
-    for (const acct of accounts) {
-      await createGLMapping(targetPoolId, { account: acct.account });
-    }
-    await loadDetails();
+  // --- Shuttle handlers: modify local pending state only ---
+
+  function handleAssignCost(accounts: ChartAccount[]) {
+    setCostError(null);
+    setPendingCostAdds((prev) => [...prev, ...accounts]);
   }
 
-  async function handleUnassignCost(ids: number[]) {
-    for (const id of ids) {
-      await deleteGLMapping(id);
+  function handleUnassignCost(ids: number[]) {
+    setCostError(null);
+    // Split into DB removals vs cancelling pending adds
+    const dbIds = ids.filter((id) => id > 0);
+    const pendingIds = ids.filter((id) => id < 0);
+
+    if (dbIds.length > 0) {
+      setPendingCostRemoves((prev) => {
+        const next = new Set(prev);
+        dbIds.forEach((id) => next.add(id));
+        return next;
+      });
     }
-    await loadDetails();
+    if (pendingIds.length > 0) {
+      // Pending adds use negative IDs; recover the index
+      const removeAccounts = new Set(pendingIds.map((id) => {
+        const item = effectiveCostItems.find((i) => i.id === id);
+        return item?.account;
+      }));
+      setPendingCostAdds((prev) => prev.filter((a) => !removeAccounts.has(a.account)));
+    }
   }
 
-  // Base account shuttle handlers
-  async function handleAssignBase(accounts: ChartAccount[]) {
-    for (const acct of accounts) {
-      await createBaseAccount(pg.id, { account: acct.account });
-    }
-    await loadDetails();
+  function handleAssignBase(accounts: ChartAccount[]) {
+    setPendingBaseAdds((prev) => [...prev, ...accounts]);
   }
 
-  async function handleUnassignBase(ids: number[]) {
-    for (const id of ids) {
-      await deleteBaseAccount(id);
+  function handleUnassignBase(ids: number[]) {
+    const dbIds = ids.filter((id) => id > 0);
+    const pendingIds = ids.filter((id) => id < 0);
+
+    if (dbIds.length > 0) {
+      setPendingBaseRemoves((prev) => {
+        const next = new Set(prev);
+        dbIds.forEach((id) => next.add(id));
+        return next;
+      });
     }
-    await loadDetails();
+    if (pendingIds.length > 0) {
+      const removeAccounts = new Set(pendingIds.map((id) => {
+        const item = effectiveBaseItems.find((i) => i.id === id);
+        return item?.account;
+      }));
+      setPendingBaseAdds((prev) => prev.filter((a) => !removeAccounts.has(a.account)));
+    }
+  }
+
+  // --- Save: persist all pending changes to DB ---
+  async function handleSave() {
+    setSaving(true);
+    setCostError(null);
+    try {
+      // Ensure a pool exists for cost account mappings
+      let targetPoolId: number;
+      if (pools.length === 0 && pendingCostAdds.length > 0) {
+        const result = await createPool(pg.id, { name: pg.name });
+        targetPoolId = result.id;
+      } else if (pools.length > 0) {
+        targetPoolId = pools[0].id;
+      } else {
+        targetPoolId = 0; // no cost adds needed
+      }
+
+      // Remove cost mappings
+      for (const id of pendingCostRemoves) {
+        await deleteGLMapping(id);
+      }
+      // Add cost mappings
+      for (const acct of pendingCostAdds) {
+        try {
+          await createGLMapping(targetPoolId, { account: acct.account });
+        } catch (err: any) {
+          let msg = err.message || "Failed to assign account";
+          try {
+            const parsed = JSON.parse(msg);
+            if (parsed.detail) msg = parsed.detail;
+          } catch {
+            // already a plain string
+          }
+          setCostError(msg);
+          // Reload to reflect partial saves and stop
+          await loadDetails();
+          clearPending();
+          setSaving(false);
+          return;
+        }
+      }
+      // Remove base accounts
+      for (const id of pendingBaseRemoves) {
+        await deleteBaseAccount(id);
+      }
+      // Add base accounts
+      for (const acct of pendingBaseAdds) {
+        await createBaseAccount(pg.id, { account: acct.account });
+      }
+
+      clearPending();
+      await loadDetails();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCancel() {
+    clearPending();
   }
 
   const BASE_OPTIONS = ["DL", "TL", "TCI", "DLH"];
 
-  // Build assigned cost accounts with names from available data
-  const assignedCostItems = costMappings.map((m) => ({
-    id: m.id,
-    account: m.account,
-    name: "",
-  }));
+  // --- Compute effective lists (DB state + pending changes) ---
+  const pendingAddAccounts = new Set(pendingCostAdds.map((a) => a.account));
+  const pendingBaseAddAccounts = new Set(pendingBaseAdds.map((a) => a.account));
 
-  const assignedBaseItems = baseAccts.map((b) => ({
-    id: b.id,
-    account: b.account,
-    name: "",
-  }));
+  // Effective cost items: DB items (minus removals) + pending adds (with negative temp IDs)
+  const effectiveCostItems = [
+    ...dbCostMappings
+      .filter((m) => !pendingCostRemoves.has(m.id))
+      .map((m) => ({ id: m.id, account: m.account, name: coaNameMap[m.account] || "" })),
+    ...pendingCostAdds.map((a, i) => ({ id: -(i + 1), account: a.account, name: a.name || coaNameMap[a.account] || "" })),
+  ];
+
+  const effectiveBaseItems = [
+    ...dbBaseAccts
+      .filter((b) => !pendingBaseRemoves.has(b.id))
+      .map((b) => ({ id: b.id, account: b.account, name: coaNameMap[b.account] || "" })),
+    ...pendingBaseAdds.map((a, i) => ({ id: -(i + 1), account: a.account, name: a.name || coaNameMap[a.account] || "" })),
+  ];
+
+  // Effective available: DB available minus pending adds
+  const effectiveAvailableCost = dbAvailableCost.filter(
+    (a) => !pendingAddAccounts.has(a.account)
+  );
+  const effectiveAvailableBase = dbAvailableBase.filter(
+    (a) => !pendingBaseAddAccounts.has(a.account)
+  );
+
+  // Re-add accounts that are pending removal back to available
+  const removedCostAccounts = dbCostMappings
+    .filter((m) => pendingCostRemoves.has(m.id))
+    .map((m) => ({ id: 0, fiscal_year_id: 0, account: m.account, name: "", category: "" } as ChartAccount));
+  const removedBaseAccounts = dbBaseAccts
+    .filter((b) => pendingBaseRemoves.has(b.id))
+    .map((b) => ({ id: 0, fiscal_year_id: 0, account: b.account, name: "", category: "" } as ChartAccount));
+
+  const availableCost = [...effectiveAvailableCost, ...removedCostAccounts].sort(
+    (a, b) => a.account.localeCompare(b.account)
+  );
+  const availableBase = [...effectiveAvailableBase, ...removedBaseAccounts].sort(
+    (a, b) => a.account.localeCompare(b.account)
+  );
+
+  // Detect accounts that appear in both cost and base of the same pool group
+  const costAcctSet = new Set(effectiveCostItems.map((m) => m.account));
+  const baseAcctSet = new Set(effectiveBaseItems.map((b) => b.account));
+  const overlapAccounts = [...costAcctSet].filter((a) => baseAcctSet.has(a));
 
   return (
     <div className="border border-border rounded-lg overflow-hidden ml-4">
@@ -469,10 +624,10 @@ function PoolGroupItem({
         {isExpanded ? <ChevronDown className="w-3.5 h-3.5 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
         <span className="font-medium text-sm flex-1">{pg.name}</span>
         <span className="text-xs text-muted-foreground bg-accent px-2 py-0.5 rounded">
-          base: {pg.base}
+          base: {editBase}
         </span>
         <span className="text-xs text-muted-foreground bg-accent/60 px-2 py-0.5 rounded">
-          {pg.cascade_order === 0 ? "1st" : pg.cascade_order === 1 ? "2nd" : "3rd"}
+          cascade: {editCascadeOrder}
         </span>
         <button
           onClick={(e) => {
@@ -551,17 +706,60 @@ function PoolGroupItem({
             <AccountShuttle
               title="Cost Accounts (Numerator)"
               available={availableCost}
-              assigned={assignedCostItems}
-              onAssign={handleAssignCost}
-              onUnassign={handleUnassignCost}
+              assigned={effectiveCostItems}
+              onAssign={async (accts) => handleAssignCost(accts)}
+              onUnassign={async (ids) => handleUnassignCost(ids)}
+              error={costError}
             />
             <AccountShuttle
               title="Base Accounts (Denominator)"
               available={availableBase}
-              assigned={assignedBaseItems}
-              onAssign={handleAssignBase}
-              onUnassign={handleUnassignBase}
+              assigned={effectiveBaseItems}
+              onAssign={async (accts) => handleAssignBase(accts)}
+              onUnassign={async (ids) => handleUnassignBase(ids)}
             />
+          </div>
+
+          {/* Overlap warning */}
+          {overlapAccounts.length > 0 && (
+            <div className="mt-2 flex items-start gap-2 text-[11px] rounded-md px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>
+                {overlapAccounts.length === 1 ? "Account" : "Accounts"}{" "}
+                <strong>{overlapAccounts.join(", ")}</strong>{" "}
+                {overlapAccounts.length === 1 ? "appears" : "appear"} in both the cost (numerator) and base (denominator) of this pool group. An account should not be in both sides of the same rate calculation.
+              </span>
+            </div>
+          )}
+
+          {/* Save / Cancel bar */}
+          <div className="mt-3 flex items-center gap-2">
+            {hasPendingChanges ? (
+              <>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="text-xs px-4 py-1.5 flex items-center gap-1.5"
+                >
+                  {saving ? "Saving..." : "Save"}
+                </button>
+                <button
+                  onClick={handleCancel}
+                  disabled={saving}
+                  className="text-xs px-4 py-1.5 bg-transparent! border border-border flex items-center gap-1.5"
+                >
+                  Cancel
+                </button>
+                <span className="text-[10px] text-muted-foreground ml-1">
+                  Unsaved changes
+                </span>
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <Check className="w-3 h-3 text-green-500" />
+                All changes saved
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -587,10 +785,13 @@ function PoolGroupItem({
               value={editCascadeOrder}
               onChange={(e) => setEditCascadeOrder(Number(e.target.value))}
             >
-              <option value={0}>0 — 1st (uses raw direct costs)</option>
-              <option value={1}>1 — 2nd (includes 1st-tier indirect)</option>
-              <option value={2}>2 — 3rd (includes all prior indirect)</option>
+              {Array.from({ length: poolCount }, (_, i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
             </select>
+            <p className="text-[10px] text-muted-foreground mt-1 mb-0">
+              Lower values cascade first (0 = computed first). Pools with the same order are computed independently at the same tier.
+            </p>
           </div>
           <button onClick={handleUpdateGroup} className="mt-2">Save</button>
         </div>
@@ -704,6 +905,7 @@ function RateGroupItem({
                 isExpanded={expandedPG === pg.id}
                 onToggle={() => setExpandedPG(expandedPG === pg.id ? null : pg.id)}
                 onRefresh={loadPoolGroups}
+                poolCount={poolGroups.length}
               />
             ))}
             {poolGroups.length === 0 && (

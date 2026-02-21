@@ -262,12 +262,12 @@ def list_pool_groups(
 ) -> list[dict[str, Any]]:
     if rate_group_id is not None:
         rows = conn.execute(
-            "SELECT * FROM pool_groups WHERE fiscal_year_id = ? AND rate_group_id = ? ORDER BY display_order, name",
+            "SELECT * FROM pool_groups WHERE fiscal_year_id = ? AND rate_group_id = ? ORDER BY cascade_order, display_order, name",
             (fiscal_year_id, rate_group_id),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM pool_groups WHERE fiscal_year_id = ? ORDER BY display_order, name",
+            "SELECT * FROM pool_groups WHERE fiscal_year_id = ? ORDER BY cascade_order, display_order, name",
             (fiscal_year_id,),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -338,6 +338,39 @@ def delete_pool(conn: sqlite3.Connection, pool_id: int) -> bool:
 # ---------------------------------------------------------------------------
 # GL Account Mappings CRUD
 # ---------------------------------------------------------------------------
+
+def check_cost_account_conflict(
+    conn: sqlite3.Connection, pool_id: int, account: str
+) -> dict[str, Any] | None:
+    """Check if *account* is already a cost account in another pool within the same rate group.
+
+    Returns ``None`` if no conflict, otherwise a dict with details:
+    ``{"account", "existing_pool", "existing_pool_group", "rate_group"}``.
+    """
+    row = conn.execute(
+        """
+        SELECT gm.account,
+               p2.name   AS existing_pool,
+               pg2.name  AS existing_pool_group,
+               rg.name   AS rate_group
+        FROM gl_account_mappings gm
+        JOIN pools p2        ON gm.pool_id = p2.id
+        JOIN pool_groups pg2 ON p2.pool_group_id = pg2.id
+        LEFT JOIN rate_groups rg ON pg2.rate_group_id = rg.id
+        WHERE gm.account = ?
+          AND gm.pool_id != ?
+          AND pg2.rate_group_id = (
+              SELECT pg.rate_group_id
+              FROM pools p
+              JOIN pool_groups pg ON p.pool_group_id = pg.id
+              WHERE p.id = ?
+          )
+        LIMIT 1
+        """,
+        (account, pool_id, pool_id),
+    ).fetchone()
+    return dict(row) if row else None
+
 
 def create_gl_mapping(
     conn: sqlite3.Connection, pool_id: int, account: str, is_unallowable: bool = False, notes: str = ""

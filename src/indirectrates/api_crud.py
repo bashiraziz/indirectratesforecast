@@ -368,6 +368,18 @@ def list_gl_mappings(pool_id: int):
 def create_gl_mapping(pool_id: int, body: GLMappingCreate):
     conn = _conn()
     try:
+        conflict = db.check_cost_account_conflict(conn, pool_id, body.account)
+        if conflict:
+            rg_label = conflict["rate_group"] or "this rate structure"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Account {conflict['account']} is already assigned as a cost account "
+                    f"in pool \"{conflict['existing_pool']}\" (pool group \"{conflict['existing_pool_group']}\") "
+                    f"within rate group \"{rg_label}\". "
+                    f"A cost account can only appear in the numerator of one pool within a rate structure group."
+                ),
+            )
         m_id = db.create_gl_mapping(conn, pool_id, body.account, body.is_unallowable, body.notes)
         return {"id": m_id, "pool_id": pool_id, **body.model_dump()}
     finally:
