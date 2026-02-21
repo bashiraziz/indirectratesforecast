@@ -57,9 +57,9 @@ function Dialog({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
       <div
-        className="bg-sidebar border border-border rounded-lg p-5 w-full max-w-md mx-4"
+        className="bg-white border border-border rounded-lg p-5 w-full max-w-md mx-4 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
@@ -332,7 +332,7 @@ function AccountShuttle({
         </div>
       </div>
       {error && (
-        <div className="mt-1.5 text-[11px] text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-1.5">
+        <div className="mt-1.5 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-md px-2.5 py-1.5">
           {error}
         </div>
       )}
@@ -722,7 +722,7 @@ function PoolGroupItem({
 
           {/* Overlap warning */}
           {overlapAccounts.length > 0 && (
-            <div className="mt-2 flex items-start gap-2 text-[11px] rounded-md px-2.5 py-1.5 bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400">
+            <div className="mt-2 flex items-start gap-2 text-[11px] rounded-md px-2.5 py-1.5 bg-amber-50 border border-amber-200 text-amber-700">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <span>
                 {overlapAccounts.length === 1 ? "Account" : "Accounts"}{" "}
@@ -1128,8 +1128,8 @@ export default function PoolSetupPage() {
               {copyResult && (
                 <div className={`text-xs rounded-md px-3 py-2 ${
                   copyResult.startsWith("Error")
-                    ? "bg-destructive/10 text-destructive border border-destructive/30"
-                    : "bg-green-500/10 text-green-400 border border-green-500/30"
+                    ? "bg-red-50 text-red-700 border border-red-200"
+                    : "bg-green-50 text-green-700 border border-green-200"
                 }`}>
                   {copyResult}
                 </div>
