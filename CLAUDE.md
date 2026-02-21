@@ -69,7 +69,7 @@ The forecast engine (`src/indirectrates/agents.py`) uses three sequential agents
 
 ### Web UI (web/)
 
-Next.js 15 / React 19 app. `web/app/page.tsx` is the main UI (upload CSVs or zip, set parameters, preview results). `web/app/api/forecast/route.ts` proxies FormData to the Python FastAPI backend. Optional OpenAI ChatKit integration via `OPENAI_API_KEY` and `CHATKIT_WORKFLOW_ID` env vars.
+Next.js 15 / React 19 app. `web/app/page.tsx` is the main UI (upload CSVs or zip, set parameters, preview results). `web/app/api/forecast/route.ts` proxies FormData to the Python FastAPI backend. Gemini-powered chat panel (`web/app/components/ChatPanel.tsx`) via `GEMINI_API_KEY` env var in `web/.env.local`.
 
 ### Rate Calculation Flow
 

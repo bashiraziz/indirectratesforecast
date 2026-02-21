@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Copy,
   Plus,
   Trash2,
   Pencil,
@@ -27,11 +29,17 @@ import {
   listGLMappings,
   createGLMapping,
   deleteGLMapping,
+  getAvailableCostAccounts,
+  getAvailableBaseAccounts,
+  listBaseAccounts,
+  createBaseAccount,
+  deleteBaseAccount,
+  copyFYSetup,
 } from "@/lib/api";
-import type { FiscalYear, RateGroup, PoolGroup, Pool, GLMapping } from "@/lib/types";
+import type { FiscalYear, RateGroup, PoolGroup, Pool, GLMapping, ChartAccount, BaseAccount } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
-// Small dialog component (no shadcn dependency needed)
+// Small dialog component
 // ---------------------------------------------------------------------------
 function Dialog({
   open,
@@ -55,7 +63,7 @@ function Dialog({
           <h3 className="text-base font-semibold m-0">{title}</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-accent !bg-transparent !border-none"
+            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
           >
             <X className="w-4 h-4" />
           </button>
@@ -109,7 +117,7 @@ function FYSelector({
 
   return (
     <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium !opacity-100">Fiscal Year:</label>
+      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
       <select
         className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
         value={selected?.id ?? ""}
@@ -127,7 +135,7 @@ function FYSelector({
       </select>
       <button
         onClick={() => setShowCreate(true)}
-        className="!bg-primary/80 text-xs px-3 py-1.5 flex items-center gap-1"
+        className="bg-primary/80! text-xs px-3 py-1.5 flex items-center gap-1"
       >
         <Plus className="w-3 h-3" /> New FY
       </button>
@@ -162,24 +170,187 @@ function FYSelector({
 }
 
 // ---------------------------------------------------------------------------
+// Account Shuttle Component
+// ---------------------------------------------------------------------------
+function AccountShuttle({
+  title,
+  available,
+  assigned,
+  onAssign,
+  onUnassign,
+}: {
+  title: string;
+  available: ChartAccount[];
+  assigned: { id: number; account: string; name?: string }[];
+  onAssign: (accounts: ChartAccount[]) => Promise<void>;
+  onUnassign: (ids: number[]) => Promise<void>;
+}) {
+  const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
+  const [selectedAssigned, setSelectedAssigned] = useState<Set<number>>(new Set());
+  const [filterAvailable, setFilterAvailable] = useState("");
+  const [filterAssigned, setFilterAssigned] = useState("");
+
+  const filteredAvailable = filterAvailable
+    ? available.filter(
+        (a) =>
+          a.account.toLowerCase().includes(filterAvailable.toLowerCase()) ||
+          a.name.toLowerCase().includes(filterAvailable.toLowerCase())
+      )
+    : available;
+
+  const filteredAssigned = filterAssigned
+    ? assigned.filter(
+        (a) =>
+          a.account.toLowerCase().includes(filterAssigned.toLowerCase()) ||
+          (a.name || "").toLowerCase().includes(filterAssigned.toLowerCase())
+      )
+    : assigned;
+
+  function toggleAvailable(account: string) {
+    setSelectedAvailable((prev) => {
+      const next = new Set(prev);
+      if (next.has(account)) next.delete(account);
+      else next.add(account);
+      return next;
+    });
+  }
+
+  function toggleAssigned(id: number) {
+    setSelectedAssigned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function moveRight() {
+    const toMove = available.filter((a) => selectedAvailable.has(a.account));
+    if (toMove.length === 0) return;
+    await onAssign(toMove);
+    setSelectedAvailable(new Set());
+  }
+
+  async function moveLeft() {
+    const ids = Array.from(selectedAssigned);
+    if (ids.length === 0) return;
+    await onUnassign(ids);
+    setSelectedAssigned(new Set());
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
+        {title}
+      </div>
+      <div className="grid grid-cols-[1fr_auto_1fr] gap-1.5">
+        {/* Available list */}
+        <div className="border border-border rounded-md overflow-hidden">
+          <div className="bg-sidebar px-2 py-1.5 border-b border-border">
+            <input
+              className="w-full text-xs bg-transparent border-none! outline-none p-0 m-0"
+              placeholder="Filter available..."
+              value={filterAvailable}
+              onChange={(e) => setFilterAvailable(e.target.value)}
+            />
+          </div>
+          <div className="h-32 overflow-y-auto">
+            {filteredAvailable.length === 0 && (
+              <div className="text-[10px] text-muted-foreground p-2 text-center">
+                {available.length === 0 ? "No accounts available" : "No matches"}
+              </div>
+            )}
+            {filteredAvailable.map((a) => (
+              <div
+                key={a.account}
+                className={`flex items-center gap-1.5 px-2 py-1 text-xs cursor-pointer hover:bg-accent/50 ${
+                  selectedAvailable.has(a.account) ? "bg-primary/15 text-primary" : ""
+                }`}
+                onClick={() => toggleAvailable(a.account)}
+              >
+                <span className="font-mono">{a.account}</span>
+                {a.name && <span className="text-muted-foreground truncate text-[10px]">{a.name}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Shuttle buttons */}
+        <div className="flex flex-col items-center justify-center gap-1">
+          <button
+            onClick={moveRight}
+            disabled={selectedAvailable.size === 0}
+            className="p-1 rounded border border-border hover:bg-accent disabled:opacity-30 bg-transparent!"
+            title="Assign selected"
+          >
+            <ChevronRight className="w-3 h-3" />
+          </button>
+          <button
+            onClick={moveLeft}
+            disabled={selectedAssigned.size === 0}
+            className="p-1 rounded border border-border hover:bg-accent disabled:opacity-30 bg-transparent!"
+            title="Unassign selected"
+          >
+            <ChevronLeft className="w-3 h-3" />
+          </button>
+        </div>
+
+        {/* Assigned list */}
+        <div className="border border-border rounded-md overflow-hidden">
+          <div className="bg-sidebar px-2 py-1.5 border-b border-border">
+            <input
+              className="w-full text-xs bg-transparent border-none! outline-none p-0 m-0"
+              placeholder="Filter assigned..."
+              value={filterAssigned}
+              onChange={(e) => setFilterAssigned(e.target.value)}
+            />
+          </div>
+          <div className="h-32 overflow-y-auto">
+            {filteredAssigned.length === 0 && (
+              <div className="text-[10px] text-muted-foreground p-2 text-center">
+                {assigned.length === 0 ? "None assigned" : "No matches"}
+              </div>
+            )}
+            {filteredAssigned.map((a) => (
+              <div
+                key={a.id}
+                className={`flex items-center gap-1.5 px-2 py-1 text-xs cursor-pointer hover:bg-accent/50 ${
+                  selectedAssigned.has(a.id) ? "bg-primary/15 text-primary" : ""
+                }`}
+                onClick={() => toggleAssigned(a.id)}
+              >
+                <span className="font-mono">{a.account}</span>
+                {a.name && <span className="text-muted-foreground truncate text-[10px]">{a.name}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Pool Group Accordion Item (Level 2 — inside a Rate Group)
 // ---------------------------------------------------------------------------
 function PoolGroupItem({
   pg,
+  fyId,
   isExpanded,
   onToggle,
-  onSelectPool,
-  selectedPoolId,
   onRefresh,
 }: {
   pg: PoolGroup;
+  fyId: number;
   isExpanded: boolean;
   onToggle: () => void;
-  onSelectPool: (pool: Pool) => void;
-  selectedPoolId: number | null;
   onRefresh: () => void;
 }) {
   const [pools, setPools] = useState<Pool[]>([]);
+  const [costMappings, setCostMappings] = useState<GLMapping[]>([]);
+  const [baseAccts, setBaseAccts] = useState<BaseAccount[]>([]);
+  const [availableCost, setAvailableCost] = useState<ChartAccount[]>([]);
+  const [availableBase, setAvailableBase] = useState<ChartAccount[]>([]);
   const [showAddPool, setShowAddPool] = useState(false);
   const [newPoolName, setNewPoolName] = useState("");
   const [editing, setEditing] = useState(false);
@@ -187,25 +358,42 @@ function PoolGroupItem({
   const [editBase, setEditBase] = useState(pg.base);
   const [editCascadeOrder, setEditCascadeOrder] = useState(pg.cascade_order ?? 0);
 
+  const loadDetails = useCallback(async () => {
+    if (!isExpanded) return;
+
+    const [poolsList, baseList, costAvail, baseAvail] = await Promise.all([
+      listPools(pg.id),
+      listBaseAccounts(pg.id),
+      getAvailableCostAccounts(fyId),
+      getAvailableBaseAccounts(fyId),
+    ]);
+
+    setPools(poolsList);
+    setBaseAccts(baseList);
+    setAvailableCost(costAvail);
+    setAvailableBase(baseAvail);
+
+    // Load cost mappings from all pools
+    const mappingPromises = poolsList.map((p) => listGLMappings(p.id));
+    const mappingsArrays = await Promise.all(mappingPromises);
+    setCostMappings(mappingsArrays.flat());
+  }, [isExpanded, pg.id, fyId]);
+
   useEffect(() => {
-    if (isExpanded) {
-      listPools(pg.id).then(setPools);
-    }
-  }, [isExpanded, pg.id]);
+    loadDetails();
+  }, [loadDetails]);
 
   async function handleAddPool() {
     if (!newPoolName.trim()) return;
     await createPool(pg.id, { name: newPoolName.trim() });
     setNewPoolName("");
     setShowAddPool(false);
-    const updated = await listPools(pg.id);
-    setPools(updated);
+    await loadDetails();
   }
 
   async function handleDeletePool(poolId: number) {
     await deletePool(poolId);
-    const updated = await listPools(pg.id);
-    setPools(updated);
+    await loadDetails();
   }
 
   async function handleUpdateGroup() {
@@ -219,7 +407,58 @@ function PoolGroupItem({
     onRefresh();
   }
 
+  // Cost account shuttle handlers
+  async function handleAssignCost(accounts: ChartAccount[]) {
+    // Assign to the first pool (or create a default one if none exist)
+    let targetPoolId: number;
+    if (pools.length === 0) {
+      const result = await createPool(pg.id, { name: pg.name });
+      targetPoolId = result.id;
+    } else {
+      targetPoolId = pools[0].id;
+    }
+    for (const acct of accounts) {
+      await createGLMapping(targetPoolId, { account: acct.account });
+    }
+    await loadDetails();
+  }
+
+  async function handleUnassignCost(ids: number[]) {
+    for (const id of ids) {
+      await deleteGLMapping(id);
+    }
+    await loadDetails();
+  }
+
+  // Base account shuttle handlers
+  async function handleAssignBase(accounts: ChartAccount[]) {
+    for (const acct of accounts) {
+      await createBaseAccount(pg.id, { account: acct.account });
+    }
+    await loadDetails();
+  }
+
+  async function handleUnassignBase(ids: number[]) {
+    for (const id of ids) {
+      await deleteBaseAccount(id);
+    }
+    await loadDetails();
+  }
+
   const BASE_OPTIONS = ["DL", "TL", "TCI", "DLH"];
+
+  // Build assigned cost accounts with names from available data
+  const assignedCostItems = costMappings.map((m) => ({
+    id: m.id,
+    account: m.account,
+    name: "",
+  }));
+
+  const assignedBaseItems = baseAccts.map((b) => ({
+    id: b.id,
+    account: b.account,
+    name: "",
+  }));
 
   return (
     <div className="border border-border rounded-lg overflow-hidden ml-4">
@@ -240,7 +479,7 @@ function PoolGroupItem({
             e.stopPropagation();
             setEditing(true);
           }}
-          className="!bg-transparent !border-none p-1 hover:bg-accent rounded"
+          className="bg-transparent! border-none! p-1 hover:bg-accent rounded"
           title="Edit"
         >
           <Pencil className="w-3 h-3" />
@@ -250,7 +489,7 @@ function PoolGroupItem({
             e.stopPropagation();
             handleDeleteGroup();
           }}
-          className="!bg-transparent !border-none p-1 hover:bg-destructive/20 rounded text-destructive"
+          className="bg-transparent! border-none! p-1 hover:bg-destructive/20 rounded text-destructive"
           title="Delete"
         >
           <Trash2 className="w-3 h-3" />
@@ -259,90 +498,82 @@ function PoolGroupItem({
 
       {isExpanded && (
         <div className="border-t border-border px-3 py-3 bg-background/30">
-          <div className="grid grid-cols-[1fr_auto] gap-4">
-            {/* Left: Pool Costs (Numerator) */}
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
-                Pool Costs (Numerator)
-              </div>
-              <div className="flex flex-wrap gap-2 mb-2">
-                {pools.map((pool) => (
-                  <div
-                    key={pool.id}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border cursor-pointer transition-colors ${
-                      selectedPoolId === pool.id
-                        ? "bg-primary/20 border-primary text-primary"
-                        : "border-border hover:border-primary/50"
-                    }`}
-                    onClick={() => onSelectPool(pool)}
+          {/* Sub-pools */}
+          <div className="mb-3">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
+              Sub-pools
+            </div>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {pools.map((pool) => (
+                <div
+                  key={pool.id}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border border-border"
+                >
+                  {pool.name}
+                  <button
+                    onClick={() => handleDeletePool(pool.id)}
+                    className="bg-transparent! border-none! p-0 hover:text-destructive"
                   >
-                    {pool.name}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeletePool(pool.id);
-                      }}
-                      className="!bg-transparent !border-none p-0 hover:text-destructive"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              {showAddPool ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    className="text-xs px-2 py-1 flex-1"
-                    placeholder="Sub-pool name"
-                    value={newPoolName}
-                    onChange={(e) => setNewPoolName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddPool()}
-                    autoFocus
-                  />
-                  <button onClick={handleAddPool} className="text-xs px-2 py-1">
-                    Add
-                  </button>
-                  <button onClick={() => setShowAddPool(false)} className="text-xs px-2 py-1 !bg-transparent">
-                    Cancel
+                    <X className="w-3 h-3" />
                   </button>
                 </div>
-              ) : (
-                <button
-                  onClick={() => setShowAddPool(true)}
-                  className="text-xs !bg-transparent !border-dashed border border-border hover:border-primary px-2 py-1 flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" /> Add sub-pool
+              ))}
+            </div>
+            {showAddPool ? (
+              <div className="flex items-center gap-2">
+                <input
+                  className="text-xs px-2 py-1 flex-1"
+                  placeholder="Sub-pool name"
+                  value={newPoolName}
+                  onChange={(e) => setNewPoolName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddPool()}
+                  autoFocus
+                />
+                <button onClick={handleAddPool} className="text-xs px-2 py-1">
+                  Add
                 </button>
-              )}
-            </div>
-            {/* Right: Allocation Base (Denominator) */}
-            <div className="border-l border-border pl-4 min-w-[160px]">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
-                Allocation Base (Denominator)
+                <button onClick={() => setShowAddPool(false)} className="text-xs px-2 py-1 bg-transparent!">
+                  Cancel
+                </button>
               </div>
-              <div className="text-sm font-medium">{pg.base}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {pg.base === "DL" && "Direct Labor $"}
-                {pg.base === "TL" && "Total Labor $ (= DL)"}
-                {pg.base === "TCI" && "Total Cost Input (DL + Subk + ODC + Travel)"}
-                {pg.base === "DLH" && "Direct Labor Hours"}
-              </div>
-              <div className="text-xs text-muted-foreground mt-2">
-                Cascade: {pg.cascade_order === 0 ? "1st (raw directs)" : pg.cascade_order === 1 ? "2nd (includes prior)" : "3rd (includes all prior)"}
-              </div>
-            </div>
+            ) : (
+              <button
+                onClick={() => setShowAddPool(true)}
+                className="text-xs bg-transparent! border-dashed! border border-border hover:border-primary px-2 py-1 flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> Add sub-pool
+              </button>
+            )}
+          </div>
+
+          {/* Shuttle UI: Cost Accounts and Base Accounts side by side */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <AccountShuttle
+              title="Cost Accounts (Numerator)"
+              available={availableCost}
+              assigned={assignedCostItems}
+              onAssign={handleAssignCost}
+              onUnassign={handleUnassignCost}
+            />
+            <AccountShuttle
+              title="Base Accounts (Denominator)"
+              available={availableBase}
+              assigned={assignedBaseItems}
+              onAssign={handleAssignBase}
+              onUnassign={handleUnassignBase}
+            />
           </div>
         </div>
       )}
 
-      <Dialog open={editing} onClose={() => setEditing(false)} title="Edit Pool">
+      <Dialog open={editing} onClose={() => setEditing(false)} title="Edit Pool Group">
         <div className="flex flex-col gap-3">
           <div>
             <label className="text-xs">Name</label>
             <input className="w-full mt-1" value={editName} onChange={(e) => setEditName(e.target.value)} />
           </div>
           <div>
-            <label className="text-xs">Base</label>
+            <label className="text-xs">Base (fallback if no base accounts assigned)</label>
             <select className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm" value={editBase} onChange={(e) => setEditBase(e.target.value)}>
               {BASE_OPTIONS.map((b) => (
                 <option key={b} value={b}>{b}</option>
@@ -376,8 +607,6 @@ function RateGroupItem({
   fyId,
   isExpanded,
   onToggle,
-  onSelectPool,
-  selectedPoolId,
   expandedPG,
   setExpandedPG,
   onRefresh,
@@ -386,8 +615,6 @@ function RateGroupItem({
   fyId: number;
   isExpanded: boolean;
   onToggle: () => void;
-  onSelectPool: (pool: Pool) => void;
-  selectedPoolId: number | null;
   expandedPG: number | null;
   setExpandedPG: (id: number | null) => void;
   onRefresh: () => void;
@@ -449,7 +676,7 @@ function RateGroupItem({
             e.stopPropagation();
             setEditing(true);
           }}
-          className="!bg-transparent !border-none p-1 hover:bg-accent rounded"
+          className="bg-transparent! border-none! p-1 hover:bg-accent rounded"
           title="Edit"
         >
           <Pencil className="w-3.5 h-3.5" />
@@ -459,7 +686,7 @@ function RateGroupItem({
             e.stopPropagation();
             handleDeleteGroup();
           }}
-          className="!bg-transparent !border-none p-1 hover:bg-destructive/20 rounded text-destructive"
+          className="bg-transparent! border-none! p-1 hover:bg-destructive/20 rounded text-destructive"
           title="Delete"
         >
           <Trash2 className="w-3.5 h-3.5" />
@@ -473,13 +700,9 @@ function RateGroupItem({
               <PoolGroupItem
                 key={pg.id}
                 pg={pg}
+                fyId={fyId}
                 isExpanded={expandedPG === pg.id}
-                onToggle={() => {
-                  setExpandedPG(expandedPG === pg.id ? null : pg.id);
-                  onSelectPool(null as unknown as Pool);
-                }}
-                onSelectPool={onSelectPool}
-                selectedPoolId={selectedPoolId}
+                onToggle={() => setExpandedPG(expandedPG === pg.id ? null : pg.id)}
                 onRefresh={loadPoolGroups}
               />
             ))}
@@ -511,14 +734,14 @@ function RateGroupItem({
               <button onClick={handleAddPool} className="text-xs px-2 py-1">
                 Add
               </button>
-              <button onClick={() => setShowAddPool(false)} className="text-xs px-2 py-1 !bg-transparent">
+              <button onClick={() => setShowAddPool(false)} className="text-xs px-2 py-1 bg-transparent!">
                 Cancel
               </button>
             </div>
           ) : (
             <button
               onClick={() => setShowAddPool(true)}
-              className="text-xs !bg-transparent !border-dashed border border-border hover:border-primary px-2 py-1 flex items-center gap-1 ml-4"
+              className="text-xs bg-transparent! border-dashed! border border-border hover:border-primary px-2 py-1 flex items-center gap-1 ml-4"
             >
               <Plus className="w-3 h-3" /> Add Pool
             </button>
@@ -540,122 +763,32 @@ function RateGroupItem({
 }
 
 // ---------------------------------------------------------------------------
-// GL Account Picker (right panel)
-// ---------------------------------------------------------------------------
-function GLAccountPicker({ pool }: { pool: Pool | null }) {
-  const [mappings, setMappings] = useState<GLMapping[]>([]);
-  const [newAccount, setNewAccount] = useState("");
-  const [newNotes, setNewNotes] = useState("");
-
-  useEffect(() => {
-    if (pool) {
-      listGLMappings(pool.id).then(setMappings);
-    } else {
-      setMappings([]);
-    }
-  }, [pool]);
-
-  if (!pool) {
-    return (
-      <div className="text-muted-foreground text-sm p-4">
-        Select a sub-pool to manage GL account mappings.
-      </div>
-    );
-  }
-
-  async function handleAdd() {
-    if (!newAccount.trim() || !pool) return;
-    await createGLMapping(pool.id, { account: newAccount.trim(), notes: newNotes.trim() });
-    setNewAccount("");
-    setNewNotes("");
-    const updated = await listGLMappings(pool.id);
-    setMappings(updated);
-  }
-
-  async function handleDelete(mappingId: number) {
-    if (!pool) return;
-    await deleteGLMapping(mappingId);
-    const updated = await listGLMappings(pool.id);
-    setMappings(updated);
-  }
-
-  return (
-    <div>
-      <h3 className="text-sm font-semibold mb-3 mt-0">
-        GL Accounts → {pool.name}
-      </h3>
-
-      {/* Existing mappings */}
-      <div className="flex flex-col gap-1 mb-3">
-        {mappings.length === 0 && (
-          <div className="text-xs text-muted-foreground py-2">No accounts assigned yet.</div>
-        )}
-        {mappings.map((m) => (
-          <div key={m.id} className="flex items-center gap-2 px-2 py-1.5 border border-border rounded text-xs">
-            <span className="font-mono font-medium">{m.account}</span>
-            {m.notes && <span className="text-muted-foreground flex-1 truncate">{m.notes}</span>}
-            {m.is_unallowable ? (
-              <span className="text-destructive/80 text-[10px] bg-destructive/10 px-1.5 rounded">UNAL</span>
-            ) : null}
-            <button
-              onClick={() => handleDelete(m.id)}
-              className="!bg-transparent !border-none p-0 hover:text-destructive ml-auto"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          </div>
-        ))}
-      </div>
-
-      {/* Add new */}
-      <div className="flex items-end gap-2">
-        <div className="flex-1">
-          <label className="text-xs">Account #</label>
-          <input
-            className="w-full mt-1 text-xs"
-            value={newAccount}
-            onChange={(e) => setNewAccount(e.target.value)}
-            placeholder="e.g. 6000"
-            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-          />
-        </div>
-        <div className="flex-1">
-          <label className="text-xs">Notes</label>
-          <input
-            className="w-full mt-1 text-xs"
-            value={newNotes}
-            onChange={(e) => setNewNotes(e.target.value)}
-            placeholder="Description"
-            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-          />
-        </div>
-        <button onClick={handleAdd} className="text-xs px-3 py-[9px]">
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main Pool Setup Page
 // ---------------------------------------------------------------------------
 export default function PoolSetupPage() {
   const [selectedFY, setSelectedFY] = useState<FiscalYear | null>(null);
+  const [allFYs, setAllFYs] = useState<FiscalYear[]>([]);
   const [rateGroups, setRateGroups] = useState<RateGroup[]>([]);
   const [expandedRG, setExpandedRG] = useState<number | null>(null);
   const [expandedPG, setExpandedPG] = useState<number | null>(null);
-  const [selectedPool, setSelectedPool] = useState<Pool | null>(null);
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
+  const [showCopyFY, setShowCopyFY] = useState(false);
+  const [sourceFYId, setSourceFYId] = useState<number | "">("");
+  const [copyResult, setCopyResult] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
 
   const loadGroups = useCallback(async () => {
     if (!selectedFY) {
       setRateGroups([]);
       return;
     }
-    const groups = await listRateGroups(selectedFY.id);
+    const [groups, fys] = await Promise.all([
+      listRateGroups(selectedFY.id),
+      listFiscalYears(),
+    ]);
     setRateGroups(groups);
+    setAllFYs(fys);
   }, [selectedFY]);
 
   useEffect(() => {
@@ -670,21 +803,51 @@ export default function PoolSetupPage() {
     await loadGroups();
   }
 
+  async function handleCopyFY() {
+    if (!sourceFYId || !selectedFY) return;
+    setCopying(true);
+    setCopyResult(null);
+    try {
+      const result = await copyFYSetup(selectedFY.id, Number(sourceFYId));
+      setCopyResult(
+        `Copied from ${result.source}: ${result.rate_groups} rate groups, ${result.pool_groups} pool groups, ${result.pools} pools, ${result.gl_mappings} GL mappings, ${result.base_accounts} base accounts, ${result.chart_accounts} chart accounts.`
+      );
+      await loadGroups();
+    } catch (err) {
+      setCopyResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  const otherFYs = allFYs.filter((fy) => fy.id !== selectedFY?.id);
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <h2 className="text-lg font-bold mt-0 mb-1">Pool Setup</h2>
       <p className="text-muted-foreground text-sm mb-4">
-        Configure rate groups, indirect cost pools (Fringe, Overhead, G&amp;A, etc.), their sub-pools, and GL account mappings for each fiscal year.
+        Configure rate groups, indirect cost pools, and assign GL accounts from the Chart of Accounts as cost accounts (numerator) and base accounts (denominator).
       </p>
 
       <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
 
       {selectedFY && (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
-          {/* Left panel: Rate Groups → Pool Groups → Pools */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold m-0">Rate Structure</h3>
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold m-0">Rate Structure</h3>
+            <div className="flex items-center gap-2">
+              {otherFYs.length > 0 && (
+                <button
+                  onClick={() => {
+                    setShowCopyFY(true);
+                    setCopyResult(null);
+                    setSourceFYId("");
+                  }}
+                  className="text-xs px-3 py-1.5 flex items-center gap-1 bg-transparent! border border-border"
+                >
+                  <Copy className="w-3 h-3" /> Copy from FY
+                </button>
+              )}
               <button
                 onClick={() => setShowAddGroup(true)}
                 className="text-xs px-3 py-1.5 flex items-center gap-1"
@@ -692,52 +855,92 @@ export default function PoolSetupPage() {
                 <Plus className="w-3 h-3" /> Add Group
               </button>
             </div>
-            <div className="flex flex-col gap-2">
-              {rateGroups.map((rg) => (
-                <RateGroupItem
-                  key={rg.id}
-                  rg={rg}
-                  fyId={selectedFY.id}
-                  isExpanded={expandedRG === rg.id}
-                  onToggle={() => {
-                    setExpandedRG(expandedRG === rg.id ? null : rg.id);
-                    setExpandedPG(null);
-                    setSelectedPool(null);
-                  }}
-                  onSelectPool={setSelectedPool}
-                  selectedPoolId={selectedPool?.id ?? null}
-                  expandedPG={expandedPG}
-                  setExpandedPG={setExpandedPG}
-                  onRefresh={loadGroups}
+          </div>
+          <div className="flex flex-col gap-2">
+            {rateGroups.map((rg) => (
+              <RateGroupItem
+                key={rg.id}
+                rg={rg}
+                fyId={selectedFY.id}
+                isExpanded={expandedRG === rg.id}
+                onToggle={() => {
+                  setExpandedRG(expandedRG === rg.id ? null : rg.id);
+                  setExpandedPG(null);
+                }}
+                expandedPG={expandedPG}
+                setExpandedPG={setExpandedPG}
+                onRefresh={loadGroups}
+              />
+            ))}
+            {rateGroups.length === 0 && (
+              <div className="text-sm text-muted-foreground border border-dashed border-border rounded-lg p-6 text-center">
+                <p className="mb-2">No rate groups defined yet.</p>
+                {otherFYs.length > 0 ? (
+                  <p className="m-0">
+                    Click &quot;Copy from FY&quot; to clone an existing setup, or &quot;Add Group&quot; to start fresh.
+                  </p>
+                ) : (
+                  <p className="m-0">
+                    Click &quot;Add Group&quot; to create a rate structure grouping (e.g. &quot;Division A&quot;, &quot;Primary Rate Structure&quot;).
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <Dialog open={showAddGroup} onClose={() => setShowAddGroup(false)} title="Add Rate Group">
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-xs">Group Name</label>
+                <input
+                  className="w-full mt-1"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  placeholder="e.g. Division A, Primary Rate Structure"
                 />
-              ))}
-              {rateGroups.length === 0 && (
-                <div className="text-sm text-muted-foreground border border-dashed border-border rounded-lg p-6 text-center">
-                  No rate groups defined yet. Click &quot;Add Group&quot; to create a rate structure grouping (e.g. &quot;Division A&quot;, &quot;Primary Rate Structure&quot;).
+              </div>
+              <button onClick={handleAddGroup} className="mt-2">Create</button>
+            </div>
+          </Dialog>
+
+          <Dialog open={showCopyFY} onClose={() => setShowCopyFY(false)} title="Copy Setup from Another FY">
+            <div className="flex flex-col gap-3">
+              <p className="text-xs text-muted-foreground m-0">
+                Clone the entire pool structure (chart of accounts, rate groups, pool groups, pools, GL mappings, and base accounts) from another fiscal year into <strong>{selectedFY.name}</strong>.
+              </p>
+              <div>
+                <label className="text-xs">Source Fiscal Year</label>
+                <select
+                  className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={sourceFYId}
+                  onChange={(e) => setSourceFYId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">Select a fiscal year...</option>
+                  {otherFYs.map((fy) => (
+                    <option key={fy.id} value={fy.id}>
+                      {fy.name} ({fy.start_month} — {fy.end_month})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {copyResult && (
+                <div className={`text-xs rounded-md px-3 py-2 ${
+                  copyResult.startsWith("Error")
+                    ? "bg-destructive/10 text-destructive border border-destructive/30"
+                    : "bg-green-500/10 text-green-400 border border-green-500/30"
+                }`}>
+                  {copyResult}
                 </div>
               )}
+              <button
+                onClick={handleCopyFY}
+                disabled={!sourceFYId || copying}
+                className="mt-2 disabled:opacity-50"
+              >
+                {copying ? "Copying..." : "Copy Setup"}
+              </button>
             </div>
-
-            <Dialog open={showAddGroup} onClose={() => setShowAddGroup(false)} title="Add Rate Group">
-              <div className="flex flex-col gap-3">
-                <div>
-                  <label className="text-xs">Group Name</label>
-                  <input
-                    className="w-full mt-1"
-                    value={newGroupName}
-                    onChange={(e) => setNewGroupName(e.target.value)}
-                    placeholder="e.g. Division A, Primary Rate Structure"
-                  />
-                </div>
-                <button onClick={handleAddGroup} className="mt-2">Create</button>
-              </div>
-            </Dialog>
-          </div>
-
-          {/* Right panel: GL Account Mappings */}
-          <div className="border border-border rounded-lg p-4 bg-card">
-            <GLAccountPicker pool={selectedPool} />
-          </div>
+          </Dialog>
         </div>
       )}
     </div>

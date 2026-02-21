@@ -1,244 +1,229 @@
 "use client";
 
-import JSZip from "jszip";
 import { useState } from "react";
+import Link from "next/link";
+import {
+  BarChart3,
+  BookOpen,
+  Calculator,
+  FileSpreadsheet,
+  GitFork,
+  Layers,
+  Calendar,
+  Tags,
+  Play,
+  Database,
+  Trash2,
+  Loader2,
+} from "lucide-react";
 
-import { ChatKitPanel } from "./components/ChatKitPanel";
+import { ChatPanel } from "./components/ChatPanel";
+import { seedTestData, clearTestData } from "../lib/api";
 
-export default function Page() {
-  const [zipFile, setZipFile] = useState<File | null>(null);
-  const [gl, setGl] = useState<File | null>(null);
-  const [map, setMap] = useState<File | null>(null);
-  const [direct, setDirect] = useState<File | null>(null);
-  const [events, setEvents] = useState<File | null>(null);
-  const [config, setConfig] = useState<File | null>(null);
+const WORKFLOW_STEPS = [
+  {
+    icon: Calendar,
+    title: "Define Fiscal Years",
+    description: "Set up your fiscal year periods with start and end months.",
+    href: "/fiscal-years",
+  },
+  {
+    icon: BookOpen,
+    title: "Import Chart of Accounts",
+    description: "Add your GL accounts — individually or via bulk CSV import. These become available for pool assignment.",
+    href: "/chart-of-accounts",
+  },
+  {
+    icon: Layers,
+    title: "Configure Pool Setup",
+    description: "Create rate groups and pool groups (Fringe, OH, G&A). Use the shuttle UI to assign GL accounts as cost accounts (numerator) and base accounts (denominator).",
+    href: "/pools",
+  },
+  {
+    icon: GitFork,
+    title: "Review Cost Structure",
+    description: "Verify your allocation formulas, cascade flow, and GL account assignments per rate group.",
+    href: "/cost-structure",
+  },
+  {
+    icon: Tags,
+    title: "Set Up Mappings",
+    description: "Define cost category mappings and configure any additional account classifications.",
+    href: "/mappings",
+  },
+  {
+    icon: Play,
+    title: "Run Forecast",
+    description: "Upload GL actuals, choose a scenario, and generate rate projections with the management pack.",
+    href: "/forecast",
+  },
+];
 
-  const [scenario, setScenario] = useState("");
-  const [forecastMonths, setForecastMonths] = useState(12);
-  const [runRateMonths, setRunRateMonths] = useState(3);
+const QUICK_LINKS = [
+  { href: "/fiscal-years", label: "Fiscal Years", icon: Calendar },
+  { href: "/chart-of-accounts", label: "Chart of Accounts", icon: BookOpen },
+  { href: "/pools", label: "Pool Setup", icon: Layers },
+  { href: "/cost-structure", label: "Cost Structure", icon: GitFork },
+  { href: "/forecast", label: "Forecast", icon: BarChart3 },
+  { href: "/rates", label: "Rates", icon: Calculator },
+  { href: "/psr", label: "PSR", icon: BarChart3 },
+];
 
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export default function HomePage() {
+  const [seedMsg, setSeedMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [seeding, setSeeding] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
-  const [narrative, setNarrative] = useState<string>("");
-  const [assumptions, setAssumptions] = useState<string>("");
-  const [chartUrls, setChartUrls] = useState<string[]>([]);
-
-  const [zipDownloadUrl, setZipDownloadUrl] = useState<string | null>(null);
-  const [excelDownloadUrl, setExcelDownloadUrl] = useState<string | null>(null);
-
-  async function runForecast() {
-    setRunning(true);
-    setError(null);
-    setNarrative("");
-    setAssumptions("");
-    setChartUrls([]);
-
+  const handleSeed = async () => {
+    setSeeding(true);
+    setSeedMsg(null);
     try {
-      const form = new FormData();
-      if (scenario.trim()) form.set("scenario", scenario.trim());
-      form.set("forecast_months", String(forecastMonths));
-      form.set("run_rate_months", String(runRateMonths));
-
-      if (zipFile) {
-        form.set("inputs_zip", zipFile, zipFile.name);
-      } else {
-        if (!gl || !map || !direct || !events) {
-          throw new Error("Upload either a ZIP, or all 4 required CSV files.");
-        }
-        form.set("gl_actuals", gl, "GL_Actuals.csv");
-        form.set("account_map", map, "Account_Map.csv");
-        form.set("direct_costs", direct, "Direct_Costs_By_Project.csv");
-        form.set("scenario_events", events, "Scenario_Events.csv");
-      }
-      if (config) {
-        form.set("config_yaml", config, config.name);
-      }
-
-      const resp = await fetch("/api/forecast", { method: "POST", body: form });
-      if (!resp.ok) {
-        const txt = await resp.text();
-        throw new Error(txt || `Forecast failed: HTTP ${resp.status}`);
-      }
-
-      const blob = await resp.blob();
-      if (zipDownloadUrl) URL.revokeObjectURL(zipDownloadUrl);
-      const newZipUrl = URL.createObjectURL(blob);
-      setZipDownloadUrl(newZipUrl);
-
-      const zip = await JSZip.loadAsync(blob);
-
-      const narrativeFile = zip.file("narrative.md");
-      const assumptionsFile = zip.file("assumptions.json");
-      const excelFile = zip.file("rate_pack.xlsx");
-
-      if (narrativeFile) setNarrative(await narrativeFile.async("string"));
-      if (assumptionsFile) setAssumptions(await assumptionsFile.async("string"));
-
-      if (excelFile) {
-        const excelBlob = await excelFile.async("blob");
-        if (excelDownloadUrl) URL.revokeObjectURL(excelDownloadUrl);
-        setExcelDownloadUrl(URL.createObjectURL(excelBlob));
-      } else {
-        setExcelDownloadUrl(null);
-      }
-
-      // Charts: charts/*.png
-      const charts: string[] = [];
-      await Promise.all(
-        Object.keys(zip.files).map(async (name) => {
-          if (!name.startsWith("charts/") || !name.endsWith(".png")) return;
-          const file = zip.file(name);
-          if (!file) return;
-          const imgBlob = await file.async("blob");
-          charts.push(URL.createObjectURL(imgBlob));
-        })
-      );
-      charts.sort();
-      setChartUrls(charts);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      const res = await seedTestData();
+      setSeedMsg({
+        type: "success",
+        text: `Loaded ${res.chart_accounts} accounts, ${res.pool_groups} pool groups, ${res.gl_mappings} GL mappings, ${res.csv_files} CSV files into ${res.fiscal_year}.`,
+      });
+    } catch (e: any) {
+      setSeedMsg({ type: "error", text: e.message || "Failed to seed data" });
     } finally {
-      setRunning(false);
+      setSeeding(false);
     }
-  }
+  };
+
+  const handleClear = async () => {
+    setClearing(true);
+    setSeedMsg(null);
+    try {
+      const res = await clearTestData();
+      setSeedMsg({
+        type: "success",
+        text: res.deleted_fy
+          ? `Cleared FY2025-TEST and ${res.csv_files_removed} CSV files.`
+          : "No test data found to clear.",
+      });
+    } catch (e: any) {
+      setSeedMsg({ type: "error", text: e.message || "Failed to clear data" });
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
-    <main className="container">
-      <h1 style={{ marginTop: 0, marginBottom: 6 }}>Indirect Rate Forecasting Agent</h1>
-      <div className="muted" style={{ marginBottom: 16 }}>
-        Upload inputs → run → download the pack. (The forecasting engine runs in the Python API; this UI can be hosted on
-        Vercel.)
+    <main className="container" style={{ maxWidth: 900 }}>
+      {/* Hero */}
+      <div style={{ textAlign: "center", padding: "48px 0 32px" }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+          <FileSpreadsheet className="w-12 h-12 text-primary" />
+        </div>
+        <h1 style={{ margin: "0 0 8px", fontSize: 28 }}>IndirectRates</h1>
+        <p className="muted" style={{ fontSize: 16, margin: 0 }}>
+          Indirect rates forecasting &mdash; Fringe, Overhead, and G&amp;A &mdash; built for auditability.
+        </p>
       </div>
 
-      <div className="row">
-        <section className="card">
-          <h2 style={{ marginTop: 0 }}>1) Upload inputs</h2>
+      {/* Workflow */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Workflow</h2>
+        <div style={{ display: "grid", gap: 16 }}>
+          {WORKFLOW_STEPS.map((step, i) => (
+            <Link key={i} href={step.href} className="no-underline" style={{ color: "inherit" }}>
+              <div
+                style={{ display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer" }}
+                className="hover:bg-accent/30 rounded-md p-2 -m-2 transition-colors"
+              >
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                  className="bg-sidebar-accent"
+                >
+                  <step.icon className="w-4 h-4 text-primary" />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+                    {i + 1}. {step.title}
+                  </div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {step.description}
+                  </div>
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
 
-          <div className="field">
-            <label>Option A: Upload a ZIP containing the 4 CSVs</label>
-            <input
-              type="file"
-              accept=".zip"
-              onChange={(e) => setZipFile(e.target.files?.[0] || null)}
-            />
-            <div className="muted">ZIP should include: GL_Actuals.csv, Account_Map.csv, Direct_Costs_By_Project.csv, Scenario_Events.csv</div>
-          </div>
+      {/* Quick Links */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Quick Links</h2>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {QUICK_LINKS.map((link) => (
+            <Link key={link.href} href={link.href} className="no-underline">
+              <span className="badge"><link.icon className="w-3 h-3" /> {link.label}</span>
+            </Link>
+          ))}
+        </div>
+      </section>
 
-          <div className="field">
-            <label>Option B: Upload each CSV</label>
-            <input type="file" accept=".csv" onChange={(e) => setGl(e.target.files?.[0] || null)} />
-            <input type="file" accept=".csv" onChange={(e) => setMap(e.target.files?.[0] || null)} />
-            <input type="file" accept=".csv" onChange={(e) => setDirect(e.target.files?.[0] || null)} />
-            <input type="file" accept=".csv" onChange={(e) => setEvents(e.target.files?.[0] || null)} />
-          </div>
-
-          <div className="field">
-            <label>Optional: Upload a rates config YAML</label>
-            <input type="file" accept=".yaml,.yml" onChange={(e) => setConfig(e.target.files?.[0] || null)} />
-          </div>
-
-          <h2>2) Run</h2>
-          <div className="field">
-            <label>Scenario (blank runs all scenarios found)</label>
-            <input value={scenario} onChange={(e) => setScenario(e.target.value)} placeholder="Base / Win / Lose" />
-          </div>
-          <div className="field">
-            <label>Forecast months</label>
-            <input
-              type="number"
-              min={1}
-              max={36}
-              value={forecastMonths}
-              onChange={(e) => setForecastMonths(Number(e.target.value))}
-            />
-          </div>
-          <div className="field">
-            <label>Run-rate months</label>
-            <input
-              type="number"
-              min={1}
-              max={12}
-              value={runRateMonths}
-              onChange={(e) => setRunRateMonths(Number(e.target.value))}
-            />
-          </div>
-
-          <button onClick={runForecast} disabled={running}>
-            {running ? "Running..." : "Run forecast"}
+      {/* Sample Data */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>
+          <Database className="w-5 h-5 inline-block mr-2" style={{ verticalAlign: "text-bottom" }} />
+          Sample Test Data
+        </h2>
+        <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
+          Load a complete FY2025-TEST setup: 20 GL accounts, Fringe/OH/G&amp;A pools, and 6 months of actuals with 3 projects.
+        </p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            onClick={handleSeed}
+            disabled={seeding || clearing}
+            className="btn btn-primary"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            {seeding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+            {seeding ? "Loading..." : "Load Sample Data"}
           </button>
-
-          {error && (
-            <div style={{ marginTop: 12 }} className="error">
-              {error}
-            </div>
-          )}
-
-          <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-            {zipDownloadUrl && (
-              <a href={zipDownloadUrl} download="rate_pack_output.zip">
-                <button style={{ width: "100%" }} disabled={running}>
-                  Download output ZIP
-                </button>
-              </a>
-            )}
-            {excelDownloadUrl && (
-              <a href={excelDownloadUrl} download="rate_pack.xlsx">
-                <button style={{ width: "100%" }} disabled={running}>
-                  Download rate_pack.xlsx
-                </button>
-              </a>
-            )}
+          <button
+            onClick={handleClear}
+            disabled={seeding || clearing}
+            className="btn btn-outline"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            {clearing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {clearing ? "Clearing..." : "Clear Sample Data"}
+          </button>
+        </div>
+        {seedMsg && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: "8px 12px",
+              borderRadius: 6,
+              fontSize: 13,
+              backgroundColor: seedMsg.type === "success" ? "var(--color-success-bg, #e6f9e6)" : "var(--color-error-bg, #fde8e8)",
+              color: seedMsg.type === "success" ? "var(--color-success, #166534)" : "var(--color-error, #991b1b)",
+              border: `1px solid ${seedMsg.type === "success" ? "var(--color-success-border, #bbf7d0)" : "var(--color-error-border, #fecaca)"}`,
+            }}
+          >
+            {seedMsg.text}
           </div>
-        </section>
-
-        <section className="card">
-          <h2 style={{ marginTop: 0 }}>Results preview</h2>
-          <div className="muted" style={{ marginBottom: 10 }}>
-            Narrative + assumptions are read from the generated ZIP so you can quickly sanity-check the run.
-          </div>
-
-          {narrative ? (
-            <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 13, lineHeight: 1.35 }}>{narrative}</pre>
-          ) : (
-            <div className="muted">Run a forecast to see the narrative here.</div>
-          )}
-
-          {assumptions && (
-            <>
-              <h3>Assumptions (json)</h3>
-              <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 12, lineHeight: 1.35, opacity: 0.95 }}>
-                {assumptions}
-              </pre>
-            </>
-          )}
-        </section>
-      </div>
-
-      <div style={{ height: 16 }} />
-
-      <section className="card">
-        <h2 style={{ marginTop: 0 }}>Charts</h2>
-        {chartUrls.length ? (
-          <div className="charts">
-            {chartUrls.map((u) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={u} src={u} alt="Rate chart" style={{ width: "100%", borderRadius: 10 }} />
-            ))}
-          </div>
-        ) : (
-          <div className="muted">Charts will appear here after a run.</div>
         )}
       </section>
 
-      <div style={{ height: 16 }} />
-
+      {/* Chat */}
       <section className="card">
-        <h2 style={{ marginTop: 0 }}>Ask questions (OpenAI)</h2>
+        <h2 style={{ marginTop: 0 }}>Ask the Rate Analyst</h2>
         <div className="muted" style={{ marginBottom: 10 }}>
-          Hosted ChatKit. Set `OPENAI_API_KEY` and `CHATKIT_WORKFLOW_ID` on the server (Vercel env vars).
+          Chat with Gemini about indirect rates, pool structures, and cost forecasting.
         </div>
-        <ChatKitPanel />
+        <ChatPanel />
       </section>
     </main>
   );

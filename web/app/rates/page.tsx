@@ -68,7 +68,7 @@ function Dialog({
           <h3 className="text-base font-semibold m-0">{title}</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-accent !bg-transparent !border-none"
+            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
           >
             <X className="w-4 h-4" />
           </button>
@@ -101,7 +101,7 @@ function FYSelector({
 
   return (
     <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium !opacity-100">Fiscal Year:</label>
+      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
       <select
         className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
         value={selected?.id ?? ""}
@@ -283,11 +283,11 @@ function RateTable({
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="border-b border-border bg-accent/30">
-                <th className="text-left px-3 py-2 font-medium sticky left-0 bg-accent/30 min-w-[120px]">
+                <th className="text-left px-3 py-2 font-medium sticky left-0 bg-accent/30 min-w-30">
                   Metric
                 </th>
                 {data.periods.map((p) => (
-                  <th key={p} className="text-right px-3 py-2 font-mono font-medium min-w-[80px]">
+                  <th key={p} className="text-right px-3 py-2 font-mono font-medium min-w-20">
                     {p}
                   </th>
                 ))}
@@ -468,7 +468,7 @@ export default function RatesPage() {
             </button>
             <button
               onClick={() => setShowRateEntry(true)}
-              className="flex items-center gap-2 text-sm px-4 py-1.5 !bg-secondary"
+              className="flex items-center gap-2 text-sm px-4 py-1.5 bg-secondary!"
             >
               <Plus className="w-3 h-3" /> Edit Reference Rates
             </button>

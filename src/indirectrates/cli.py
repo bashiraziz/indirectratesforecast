@@ -52,6 +52,24 @@ def init_db_cmd(
     console.print(f"Database initialized at {path}")
 
 
+def _find_available_port(host: str, preferred: int) -> int:
+    """Return *preferred* if free, otherwise try fallbacks then let the OS pick."""
+    import socket
+
+    candidates = [preferred] + [p for p in (8000, 8001, 8080, 8888) if p != preferred]
+    for port in candidates:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                continue
+    # All candidates busy — let the OS assign one
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host to bind (use 0.0.0.0 for LAN)."),
@@ -63,4 +81,7 @@ def serve(
     except Exception as e:  # pragma: no cover
         raise typer.BadParameter('Missing server deps. Install with: pip install -e ".[server]"') from e
 
-    uvicorn.run("indirectrates.server:app", host=host, port=port, reload=False)
+    actual_port = _find_available_port(host, port)
+    if actual_port != port:
+        console.print(f"Port {port} is in use, using port {actual_port} instead.")
+    uvicorn.run("indirectrates.server:app", host=host, port=actual_port, reload=False)

@@ -107,7 +107,7 @@ function Dialog({
           <h3 className="text-base font-semibold m-0">{title}</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-accent !bg-transparent !border-none"
+            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
           >
             <X className="w-4 h-4" />
           </button>
@@ -141,7 +141,7 @@ function FYSelector({
 
   return (
     <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium !opacity-100">Fiscal Year:</label>
+      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
       <select
         className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
         value={selected?.id ?? ""}
@@ -549,7 +549,7 @@ export default function PSRPage() {
             </button>
             <button
               onClick={() => setShowRevenue(true)}
-              className="flex items-center gap-2 text-sm px-4 py-1.5 !bg-secondary"
+              className="flex items-center gap-2 text-sm px-4 py-1.5 bg-secondary!"
             >
               <Plus className="w-3 h-3" /> Revenue Data
               {revenueData.length > 0 && (

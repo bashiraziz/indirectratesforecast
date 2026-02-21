@@ -105,6 +105,25 @@ class CostCategoryUpdate(BaseModel):
     is_direct: bool | None = None
 
 
+class CopyFYSetup(BaseModel):
+    source_fy_id: int
+
+
+class ChartAccountCreate(BaseModel):
+    account: str
+    name: str = ""
+    category: str = ""
+
+
+class ChartAccountBulk(BaseModel):
+    accounts: list[ChartAccountCreate]
+
+
+class BaseAccountCreate(BaseModel):
+    account: str
+    notes: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Fiscal Years
 # ---------------------------------------------------------------------------
@@ -147,6 +166,27 @@ def delete_fiscal_year(fy_id: int):
         if not db.delete_fiscal_year(conn, fy_id):
             _404("Fiscal year")
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Copy FY Setup
+# ---------------------------------------------------------------------------
+
+@router.post("/fiscal-years/{fy_id}/copy-setup", status_code=201)
+def copy_fy_setup(fy_id: int, body: CopyFYSetup):
+    conn = _conn()
+    try:
+        # Verify both FYs exist
+        target = db.get_fiscal_year(conn, fy_id)
+        if not target:
+            _404("Target fiscal year")
+        source = db.get_fiscal_year(conn, body.source_fy_id)
+        if not source:
+            _404("Source fiscal year")
+        counts = db.copy_fy_setup(conn, body.source_fy_id, fy_id)
+        return {"ok": True, "source": source["name"], "target": target["name"], **counts}
     finally:
         conn.close()
 
@@ -476,6 +516,133 @@ def delete_cost_category(cc_id: int):
         if not db.delete_cost_category(conn, cc_id):
             _404("Cost category")
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Chart of Accounts
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/chart-of-accounts")
+def list_chart_of_accounts(fy_id: int):
+    conn = _conn()
+    try:
+        return db.list_chart_of_accounts(conn, fy_id)
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/chart-of-accounts", status_code=201)
+def create_chart_account(fy_id: int, body: ChartAccountCreate):
+    conn = _conn()
+    try:
+        ca_id = db.create_chart_account(conn, fy_id, body.account, body.name, body.category)
+        return {"id": ca_id, "fiscal_year_id": fy_id, **body.model_dump()}
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/chart-of-accounts/bulk", status_code=201)
+def bulk_create_chart_accounts(fy_id: int, body: ChartAccountBulk):
+    conn = _conn()
+    try:
+        ids = db.bulk_create_chart_accounts(conn, fy_id, [a.model_dump() for a in body.accounts])
+        return {"ids": ids, "imported": len(ids)}
+    finally:
+        conn.close()
+
+
+@router.delete("/chart-of-accounts/{ca_id}")
+def delete_chart_account(ca_id: int):
+    conn = _conn()
+    try:
+        if not db.delete_chart_account(conn, ca_id):
+            _404("Chart account")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Pool Group Base Accounts
+# ---------------------------------------------------------------------------
+
+@router.get("/pool-groups/{pg_id}/base-accounts")
+def list_base_accounts(pg_id: int):
+    conn = _conn()
+    try:
+        return db.list_base_accounts(conn, pg_id)
+    finally:
+        conn.close()
+
+
+@router.post("/pool-groups/{pg_id}/base-accounts", status_code=201)
+def create_base_account(pg_id: int, body: BaseAccountCreate):
+    conn = _conn()
+    try:
+        ba_id = db.create_base_account(conn, pg_id, body.account, body.notes)
+        return {"id": ba_id, "pool_group_id": pg_id, **body.model_dump()}
+    finally:
+        conn.close()
+
+
+@router.delete("/base-accounts/{ba_id}")
+def delete_base_account(ba_id: int):
+    conn = _conn()
+    try:
+        if not db.delete_base_account(conn, ba_id):
+            _404("Base account")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Available Accounts (for shuttle UI)
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/available-cost-accounts")
+def get_available_cost_accounts(fy_id: int):
+    conn = _conn()
+    try:
+        return db.get_available_cost_accounts(conn, fy_id)
+    finally:
+        conn.close()
+
+
+@router.get("/fiscal-years/{fy_id}/available-base-accounts")
+def get_available_base_accounts(fy_id: int):
+    conn = _conn()
+    try:
+        return db.get_available_base_accounts(conn, fy_id)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Seed / Clear Test Data
+# ---------------------------------------------------------------------------
+
+@router.post("/seed-test-data", status_code=201)
+def seed_test_data(data_dir: str = "data_test"):
+    from .seed import seed_test_data as _seed
+    conn = _conn()
+    try:
+        result = _seed(conn, Path(data_dir))
+        if "error" in result:
+            raise HTTPException(status_code=409, detail=result["error"])
+        return result
+    finally:
+        conn.close()
+
+
+@router.delete("/seed-test-data")
+def clear_test_data(data_dir: str = "data_test"):
+    from .seed import clear_test_data as _clear
+    conn = _conn()
+    try:
+        return _clear(conn, Path(data_dir))
     finally:
         conn.close()
 

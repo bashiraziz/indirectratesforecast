@@ -7,6 +7,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
+        source: "/api/fiscal-years",
+        destination: `${BACKEND_URL}/api/fiscal-years`,
+      },
+      {
         source: "/api/fiscal-years/:path*",
         destination: `${BACKEND_URL}/api/fiscal-years/:path*`,
       },
@@ -33,6 +37,18 @@ const nextConfig: NextConfig = {
       {
         source: "/api/reference-rates/:path*",
         destination: `${BACKEND_URL}/api/reference-rates/:path*`,
+      },
+      {
+        source: "/api/seed-test-data",
+        destination: `${BACKEND_URL}/api/seed-test-data`,
+      },
+      {
+        source: "/api/chart-of-accounts/:path*",
+        destination: `${BACKEND_URL}/api/chart-of-accounts/:path*`,
+      },
+      {
+        source: "/api/base-accounts/:path*",
+        destination: `${BACKEND_URL}/api/base-accounts/:path*`,
       },
     ];
   },

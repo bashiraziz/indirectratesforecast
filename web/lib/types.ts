@@ -63,3 +63,18 @@ export interface CostCategory {
   gl_account: string;
   is_direct: number;
 }
+
+export interface ChartAccount {
+  id: number;
+  fiscal_year_id: number;
+  account: string;
+  name: string;
+  category: string;
+}
+
+export interface BaseAccount {
+  id: number;
+  pool_group_id: number;
+  account: string;
+  notes: string;
+}

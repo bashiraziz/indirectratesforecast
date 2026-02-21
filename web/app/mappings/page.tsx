@@ -51,7 +51,7 @@ function Dialog({
           <h3 className="text-base font-semibold m-0">{title}</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-accent !bg-transparent !border-none"
+            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
           >
             <X className="w-4 h-4" />
           </button>
@@ -85,7 +85,7 @@ function FYSelector({
 
   return (
     <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium !opacity-100">Fiscal Year:</label>
+      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
       <select
         className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
         value={selected?.id ?? ""}
@@ -175,7 +175,7 @@ function CategoryRow({
             <button
               onClick={handleSave}
               disabled={saving}
-              className="!bg-transparent !border-none p-1 hover:bg-accent rounded text-green-400"
+              className="bg-transparent! border-none! p-1 hover:bg-accent rounded text-green-400"
               title="Save"
             >
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
@@ -187,7 +187,7 @@ function CategoryRow({
                 setEditGL(cat.gl_account);
                 setEditDirect(!!cat.is_direct);
               }}
-              className="!bg-transparent !border-none p-1 hover:bg-accent rounded"
+              className="bg-transparent! border-none! p-1 hover:bg-accent rounded"
               title="Cancel"
             >
               <X className="w-3.5 h-3.5" />
@@ -219,14 +219,14 @@ function CategoryRow({
         <div className="flex items-center gap-1 justify-end">
           <button
             onClick={() => setEditing(true)}
-            className="!bg-transparent !border-none p-1 hover:bg-accent rounded"
+            className="bg-transparent! border-none! p-1 hover:bg-accent rounded"
             title="Edit"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleDelete}
-            className="!bg-transparent !border-none p-1 hover:bg-destructive/20 rounded text-destructive"
+            className="bg-transparent! border-none! p-1 hover:bg-destructive/20 rounded text-destructive"
             title="Delete"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -349,7 +349,7 @@ function CategoryTab({
               onChange={(e) => setNewDirect(e.target.checked)}
               className="w-4 h-4"
             />
-            <label htmlFor="isDirect" className="text-sm !opacity-100">Direct Cost</label>
+            <label htmlFor="isDirect" className="text-sm opacity-100!">Direct Cost</label>
           </div>
           <button
             onClick={handleAdd}
@@ -410,10 +410,10 @@ export default function MappingsPage() {
                 <button
                   key={type}
                   onClick={() => setActiveTab(type)}
-                  className={`text-sm px-4 py-2 rounded-t-md !border-b-0 transition-colors ${
+                  className={`text-sm px-4 py-2 rounded-t-md border-b-0! transition-colors ${
                     active
-                      ? "!bg-accent text-foreground font-medium border border-border"
-                      : "!bg-transparent text-muted-foreground hover:text-foreground !border-transparent"
+                      ? "bg-accent! text-foreground font-medium border border-border"
+                      : "bg-transparent! text-muted-foreground hover:text-foreground border-transparent!"
                   }`}
                 >
                   {type}

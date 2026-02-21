@@ -23,3 +23,5 @@ enhancements
 
 *.db
 .claude/
+.env.local
+.env*.local

@@ -1,0 +1,15 @@
+Account,Pool,BaseCategory,IsUnallowable,Notes
+6001,Fringe,DL,False,Health Insurance
+6002,Fringe,DL,False,401k Match
+6003,Fringe,DL,False,Payroll Taxes
+6004,Fringe,DL,False,Workers Comp
+6101,Overhead,DL,False,Rent
+6102,Overhead,DL,False,Utilities
+6103,Overhead,DL,False,IT Equipment & Software
+6104,Overhead,DL,False,Office Supplies
+6105,Overhead,DL,False,Depreciation
+7001,G&A,TCI,False,Executive Salaries
+7002,G&A,TCI,False,Accounting & Finance
+7003,G&A,TCI,False,HR & Admin
+7004,G&A,TCI,False,Business Development
+7005,G&A,TCI,False,General Insurance

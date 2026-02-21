@@ -7,6 +7,8 @@ import type {
   ReferenceRate,
   RevenueRow,
   CostCategory,
+  ChartAccount,
+  BaseAccount,
 } from "./types";
 
 const BASE = "";
@@ -29,6 +31,11 @@ export const createFiscalYear = (data: { name: string; start_month: string; end_
   fetchJSON<FiscalYear & { id: number }>("/api/fiscal-years", { method: "POST", body: JSON.stringify(data) });
 export const deleteFiscalYear = (id: number) =>
   fetchJSON<{ ok: boolean }>(`/api/fiscal-years/${id}`, { method: "DELETE" });
+export const copyFYSetup = (targetFyId: number, sourceFyId: number) =>
+  fetchJSON<{ ok: boolean; source: string; target: string; chart_accounts: number; rate_groups: number; pool_groups: number; pools: number; gl_mappings: number; base_accounts: number }>(
+    `/api/fiscal-years/${targetFyId}/copy-setup`,
+    { method: "POST", body: JSON.stringify({ source_fy_id: sourceFyId }) }
+  );
 
 // Rate Groups
 export const listRateGroups = (fyId: number) => fetchJSON<RateGroup[]>(`/api/fiscal-years/${fyId}/rate-groups`);
@@ -97,3 +104,37 @@ export const updateCostCategory = (ccId: number, data: { category_name?: string;
   fetchJSON<{ ok: boolean }>(`/api/cost-categories/${ccId}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteCostCategory = (ccId: number) =>
   fetchJSON<{ ok: boolean }>(`/api/cost-categories/${ccId}`, { method: "DELETE" });
+
+// Chart of Accounts
+export const listChartOfAccounts = (fyId: number) =>
+  fetchJSON<ChartAccount[]>(`/api/fiscal-years/${fyId}/chart-of-accounts`);
+export const createChartAccount = (fyId: number, data: { account: string; name?: string; category?: string }) =>
+  fetchJSON<ChartAccount & { id: number }>(`/api/fiscal-years/${fyId}/chart-of-accounts`, { method: "POST", body: JSON.stringify(data) });
+export const bulkCreateChartAccounts = (fyId: number, accounts: { account: string; name?: string; category?: string }[]) =>
+  fetchJSON<{ ids: number[]; imported: number }>(`/api/fiscal-years/${fyId}/chart-of-accounts/bulk`, { method: "POST", body: JSON.stringify({ accounts }) });
+export const deleteChartAccount = (caId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/chart-of-accounts/${caId}`, { method: "DELETE" });
+
+// Base Accounts
+export const listBaseAccounts = (pgId: number) =>
+  fetchJSON<BaseAccount[]>(`/api/pool-groups/${pgId}/base-accounts`);
+export const createBaseAccount = (pgId: number, data: { account: string; notes?: string }) =>
+  fetchJSON<BaseAccount & { id: number }>(`/api/pool-groups/${pgId}/base-accounts`, { method: "POST", body: JSON.stringify(data) });
+export const deleteBaseAccount = (baId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/base-accounts/${baId}`, { method: "DELETE" });
+
+// Available Accounts (for shuttle UI)
+export const getAvailableCostAccounts = (fyId: number) =>
+  fetchJSON<ChartAccount[]>(`/api/fiscal-years/${fyId}/available-cost-accounts`);
+export const getAvailableBaseAccounts = (fyId: number) =>
+  fetchJSON<ChartAccount[]>(`/api/fiscal-years/${fyId}/available-base-accounts`);
+
+// Seed / Clear Test Data
+export const seedTestData = () =>
+  fetchJSON<{ fiscal_year: string; fiscal_year_id: number; chart_accounts: number; rate_groups: number; pool_groups: number; pools: number; gl_mappings: number; base_accounts: number; csv_files: number }>(
+    "/api/seed-test-data", { method: "POST" }
+  );
+export const clearTestData = () =>
+  fetchJSON<{ deleted_fy: boolean; csv_files_removed: number }>(
+    "/api/seed-test-data", { method: "DELETE" }
+  );

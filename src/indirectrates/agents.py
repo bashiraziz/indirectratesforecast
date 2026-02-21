@@ -8,6 +8,7 @@ from .io import load_inputs
 from .mapping import map_accounts_to_pools
 from .model import apply_scenario_events, build_baseline_projection, compute_actual_aggregates, compute_rates_and_impacts
 from .normalize import normalize_inputs
+from .narrative_ai import write_ai_narrative
 from .reporting import save_rate_charts, write_assumptions, write_excel_pack, write_narrative
 from .types import ForecastResult
 
@@ -85,9 +86,9 @@ class ReporterAgent:
         for res in results:
             scen_dir = out_dir / res.scenario
             scen_dir.mkdir(parents=True, exist_ok=True)
-            write_narrative(scen_dir / "narrative.md", res)
+            write_ai_narrative(scen_dir / "narrative.md", res)
             write_assumptions(scen_dir / "assumptions.json", res.assumptions)
 
         base = next((r for r in results if r.scenario == "Base"), results[0])
-        write_narrative(out_dir / "narrative.md", base)
+        write_ai_narrative(out_dir / "narrative.md", base)
         write_assumptions(out_dir / "assumptions.json", base.assumptions)
