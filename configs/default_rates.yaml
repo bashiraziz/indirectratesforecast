@@ -11,6 +11,24 @@ base_definitions:
       - Subk
       - ODC
       - Travel
+      - Material
+      - Equipment
+  Fringe:
+    sum:
+      - FringeBenefits
+      - PayrollTaxes
+  Overhead:
+    sum:
+      - Facilities
+      - IT
+  G&A:
+    sum:
+      - Executive
+      - Admin
+      - HR
+  Unallowable:
+    sum:
+      - Entertainment
 
 rates:
   Fringe:

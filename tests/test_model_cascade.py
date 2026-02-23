@@ -89,7 +89,7 @@ class TestCascadingRates:
         # Fringe rate = 25K / 100K = 0.25
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=25_000, oh_pool=10_000, ga_pool=22_500)
         cfg = _cascaded_config()
-        rates, impacts = compute_rates_and_impacts(proj, cfg)
+        rates, impacts, _ = compute_rates_and_impacts(proj, cfg)
 
         # Fringe$ on the project: raw TL ($100K) * 0.25 = $25K
         fringe_dollars = impacts["Fringe$"].iloc[0]
@@ -100,7 +100,7 @@ class TestCascadingRates:
         # OH rate = 10K / 100K = 0.10, Fringe rate = 25K/100K = 0.25
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=25_000, oh_pool=10_000, ga_pool=22_500)
         cfg = _cascaded_config()
-        rates, impacts = compute_rates_and_impacts(proj, cfg)
+        rates, impacts, _ = compute_rates_and_impacts(proj, cfg)
 
         # OH$ should be (DL + Fringe$) * OH_rate = ($100K + $25K) * 0.10 = $12.5K
         oh_dollars = impacts["Overhead$"].iloc[0]
@@ -111,7 +111,7 @@ class TestCascadingRates:
         # G&A rate = 22.5K / 150K = 0.15
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=25_000, oh_pool=10_000, ga_pool=22_500)
         cfg = _cascaded_config()
-        rates, impacts = compute_rates_and_impacts(proj, cfg)
+        rates, impacts, _ = compute_rates_and_impacts(proj, cfg)
 
         # G&A$ should be (TCI + Fringe$ + OH$) * G&A_rate
         # = ($150K + $25K + $12.5K) * 0.15 = $187.5K * 0.15 = $28,125
@@ -122,7 +122,7 @@ class TestCascadingRates:
         """LoadedCost$ with cascading should be TCI + all indirect $."""
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=25_000, oh_pool=10_000, ga_pool=22_500)
         cfg = _cascaded_config()
-        rates, impacts = compute_rates_and_impacts(proj, cfg)
+        rates, impacts, _ = compute_rates_and_impacts(proj, cfg)
 
         loaded = impacts["LoadedCost$"].iloc[0]
         # $150K + $25K + $12.5K + $28.125K = $215.625K
@@ -132,8 +132,8 @@ class TestCascadingRates:
         """Flat (all cascade_order=0) should give lower loaded costs than cascaded."""
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=25_000, oh_pool=10_000, ga_pool=22_500)
 
-        _, impacts_flat = compute_rates_and_impacts(proj, _flat_config())
-        _, impacts_cascade = compute_rates_and_impacts(proj, _cascaded_config())
+        _, impacts_flat, _ = compute_rates_and_impacts(proj, _flat_config())
+        _, impacts_cascade, _ = compute_rates_and_impacts(proj, _cascaded_config())
 
         flat_loaded = impacts_flat["LoadedCost$"].iloc[0]
         cascade_loaded = impacts_cascade["LoadedCost$"].iloc[0]
@@ -155,7 +155,7 @@ class TestCascadingRates:
             unallowable_pool_names=set(),
         )
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=20_000, oh_pool=10_000, ga_pool=0)
-        rates, impacts = compute_rates_and_impacts(proj, cfg)
+        rates, impacts, _ = compute_rates_and_impacts(proj, cfg)
 
         # Both at cascade_order=0, so both use raw DL=$100K
         # PoolA rate = 20K/100K = 0.20 → PoolA$ = $100K * 0.20 = $20K
@@ -170,8 +170,8 @@ class TestCascadingRates:
         """
         proj = _make_projection(dl=100_000, subk=50_000, fringe_pool=25_000, oh_pool=10_000, ga_pool=22_500)
 
-        rates_flat, _ = compute_rates_and_impacts(proj, _flat_config())
-        rates_cascade, _ = compute_rates_and_impacts(proj, _cascaded_config())
+        rates_flat, _, _ = compute_rates_and_impacts(proj, _flat_config())
+        rates_cascade, _, _ = compute_rates_and_impacts(proj, _cascaded_config())
 
         for rate_name in ["Fringe", "Overhead", "G&A"]:
             assert rates_flat[rate_name].iloc[0] == pytest.approx(

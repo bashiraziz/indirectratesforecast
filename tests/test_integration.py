@@ -367,9 +367,10 @@ class TestPSRAPIEndpoint:
             assert "fee" in row
             assert "margin_pct" in row
 
-    def test_psr_requires_input_dir(self, client):
+    def test_psr_bad_data_dir(self, client):
         fy = client.post("/api/fiscal-years", json={
             "name": "FY2025", "start_month": "2025-01", "end_month": "2025-12",
         }).json()
-        resp = client.get(f"/api/fiscal-years/{fy['id']}/psr")
+        # Explicit nonexistent dir → 400
+        resp = client.get(f"/api/fiscal-years/{fy['id']}/psr?input_dir=nonexistent_dir")
         assert resp.status_code == 400

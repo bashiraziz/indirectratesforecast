@@ -7,6 +7,7 @@ and writes CSV files for the forecast engine.
 from __future__ import annotations
 
 import csv
+import json
 import random
 import sqlite3
 from pathlib import Path
@@ -191,7 +192,10 @@ def seed_test_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, 
             db.create_base_account(conn, pg_id, acct)
             base_account_count += 1
 
-    # 5. Write CSV files
+    # 5. Seed scenarios into DB
+    scenario_count = _seed_scenarios(conn, fy_id)
+
+    # 6. Write CSV files
     _write_gl_actuals(data_dir, rng)
     _write_direct_costs(data_dir, rng)
     _write_account_map(data_dir)
@@ -206,6 +210,7 @@ def seed_test_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, 
         "pools": pool_count,
         "gl_mappings": gl_mapping_count,
         "base_accounts": base_account_count,
+        "scenarios": scenario_count,
         "csv_files": 4,
     }
 
@@ -233,6 +238,48 @@ def clear_test_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str,
             removed += 1
 
     return {"deleted_fy": deleted_fy, "csv_files_removed": removed}
+
+
+def _seed_scenarios(conn: sqlite3.Connection, fy_id: int) -> int:
+    """Seed sample scenarios: Base, Win, Lose."""
+    count = 0
+
+    # Base — no-op scenario
+    base_id = db.create_scenario(conn, fy_id, "Base", "No changes — baseline forecast")
+    db.create_scenario_event(
+        conn, base_id,
+        effective_period="2025-01", event_type="ADJUST", project="",
+        delta_direct_labor=0, delta_direct_labor_hrs=0,
+        delta_subk=0, delta_odc=0, delta_travel=0,
+        pool_deltas=json.dumps({}), notes="No changes",
+    )
+    count += 1
+
+    # Win — new contract win
+    win_id = db.create_scenario(conn, fy_id, "Win", "New contract win adds staff and costs")
+    db.create_scenario_event(
+        conn, win_id,
+        effective_period="2025-04", event_type="WIN", project="PROJ-DELTA",
+        delta_direct_labor=60000, delta_direct_labor_hrs=800,
+        delta_subk=15000, delta_odc=5000, delta_travel=2000,
+        pool_deltas=json.dumps({"Fringe": 3000, "Overhead": 4000, "G&A": 1500}),
+        notes="New contract PROJ-DELTA awarded",
+    )
+    count += 1
+
+    # Lose — contract loss
+    lose_id = db.create_scenario(conn, fy_id, "Lose", "Contract loss reduces direct costs")
+    db.create_scenario_event(
+        conn, lose_id,
+        effective_period="2025-04", event_type="LOSE", project="PROJ-BETA",
+        delta_direct_labor=-90000, delta_direct_labor_hrs=-1200,
+        delta_subk=-10000, delta_odc=-5000, delta_travel=-2000,
+        pool_deltas=json.dumps({}),
+        notes="PROJ-BETA ends — pools are sticky",
+    )
+    count += 1
+
+    return count
 
 
 def _write_gl_actuals(data_dir: Path, rng: random.Random) -> None:

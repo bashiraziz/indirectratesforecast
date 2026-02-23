@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
+
 from .config import RateConfig
 from .io import load_inputs
 from .mapping import map_accounts_to_pools
@@ -18,6 +20,7 @@ class ScenarioPlan:
     scenarios: list[str]
     forecast_months: int
     run_rate_months: int
+    fy_start: pd.Period | None = None
 
 
 class PlannerAgent:
@@ -37,7 +40,13 @@ class PlannerAgent:
 
 
 class AnalystAgent:
-    def run(self, input_dir: Path, config: RateConfig, plan: ScenarioPlan) -> list[ForecastResult]:
+    def run(
+        self,
+        input_dir: Path,
+        config: RateConfig,
+        plan: ScenarioPlan,
+        entity: str | None = None,
+    ) -> list[ForecastResult]:
         inputs = load_inputs(input_dir)
         gl, mp, direct, events, warnings = normalize_inputs(
             inputs.gl_actuals, inputs.account_map, inputs.direct_costs, inputs.scenario_events
@@ -45,7 +54,9 @@ class AnalystAgent:
         gl_mapped, map_warnings = map_accounts_to_pools(gl, mp)
         warnings.extend(map_warnings)
 
-        actual_pools, actual_bases, direct_by_project, agg_warnings = compute_actual_aggregates(gl_mapped, direct, config)
+        actual_pools, actual_bases, direct_by_project, agg_warnings = compute_actual_aggregates(
+            gl_mapped, direct, config, entity=entity
+        )
         warnings.extend(agg_warnings)
 
         baseline = build_baseline_projection(
@@ -56,11 +67,19 @@ class AnalystAgent:
             run_rate_months=plan.run_rate_months,
         )
 
+        # Determine fy_start: explicit from plan, or fallback to earliest actual period
+        fy_start = plan.fy_start
+        if fy_start is None:
+            fy_start = actual_pools.index.min()
+
         results: list[ForecastResult] = []
         for scenario in plan.scenarios:
-            proj = apply_scenario_events(baseline, events, scenario=scenario)
-            rates, impacts = compute_rates_and_impacts(proj, config)
+            proj = apply_scenario_events(baseline, events, scenario=scenario, config=config)
+            rates, impacts, ytd_rates = compute_rates_and_impacts(proj, config, fy_start=fy_start)
             assumptions = dict(proj.assumptions)
+            assumptions["fy_start"] = str(fy_start)
+            if entity:
+                assumptions["entity"] = entity
             results.append(
                 ForecastResult(
                     scenario=scenario,
@@ -71,6 +90,7 @@ class AnalystAgent:
                     project_impacts=impacts,
                     assumptions=assumptions,
                     warnings=list(dict.fromkeys(warnings + proj.warnings)),
+                    ytd_rates=ytd_rates,
                 )
             )
         return results

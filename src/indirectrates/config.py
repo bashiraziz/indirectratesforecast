@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import importlib.resources
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +20,8 @@ class RateConfig:
     base_definitions: dict[str, Any]
     rates: dict[str, RateDefinition]
     unallowable_pool_names: set[str]
+    base_account_map: dict[str, list[str]] = field(default_factory=dict)
+    # e.g. {"DL": ["5100.01", "5100.02", ...], "TCI": ["5100.01", ..., "5300.01", ...]}
 
     @staticmethod
     def from_mapping(raw: Mapping[str, Any]) -> "RateConfig":
@@ -34,10 +36,12 @@ class RateConfig:
             for name, v in rates_raw.items()
         }
         unallowable = set(raw.get("unallowable_pool_names", []) or [])
+        base_account_map = dict(raw.get("base_account_map", {}) or {})
         return RateConfig(
             base_definitions=base_definitions,
             rates=rates,
             unallowable_pool_names=unallowable,
+            base_account_map=base_account_map,
         )
 
     @staticmethod

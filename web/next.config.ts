@@ -7,6 +7,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
+        source: "/api/dashboard-summary",
+        destination: `${BACKEND_URL}/api/dashboard-summary`,
+      },
+      {
         source: "/api/fiscal-years",
         destination: `${BACKEND_URL}/api/fiscal-years`,
       },
@@ -43,12 +47,36 @@ const nextConfig: NextConfig = {
         destination: `${BACKEND_URL}/api/seed-test-data`,
       },
       {
+        source: "/api/seed-demo-data",
+        destination: `${BACKEND_URL}/api/seed-demo-data`,
+      },
+      {
         source: "/api/chart-of-accounts/:path*",
         destination: `${BACKEND_URL}/api/chart-of-accounts/:path*`,
       },
       {
         source: "/api/base-accounts/:path*",
         destination: `${BACKEND_URL}/api/base-accounts/:path*`,
+      },
+      {
+        source: "/api/scenarios/:path*",
+        destination: `${BACKEND_URL}/api/scenarios/:path*`,
+      },
+      {
+        source: "/api/scenario-events/:path*",
+        destination: `${BACKEND_URL}/api/scenario-events/:path*`,
+      },
+      {
+        source: "/api/forecast-runs/:path*",
+        destination: `${BACKEND_URL}/api/forecast-runs/:path*`,
+      },
+      {
+        source: "/api/files/:path*",
+        destination: `${BACKEND_URL}/api/files/:path*`,
+      },
+      {
+        source: "/api/storage-usage",
+        destination: `${BACKEND_URL}/api/storage-usage`,
       },
     ];
   },

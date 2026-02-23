@@ -9,6 +9,13 @@ import type {
   CostCategory,
   ChartAccount,
   BaseAccount,
+  Scenario,
+  ScenarioEvent,
+  ForecastRun,
+  DashboardSummary,
+  PSTData,
+  UploadedFile,
+  StorageUsage,
 } from "./types";
 
 const BASE = "";
@@ -24,6 +31,9 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return resp.json();
 }
+
+// Dashboard
+export const getDashboardSummary = () => fetchJSON<DashboardSummary>("/api/dashboard-summary");
 
 // Fiscal Years
 export const listFiscalYears = () => fetchJSON<FiscalYear[]>("/api/fiscal-years");
@@ -83,6 +93,17 @@ export const upsertReferenceRate = (fyId: number, data: { rate_type: string; poo
 export const bulkUpsertReferenceRates = (fyId: number, data: { rate_type: string; pool_group_name: string; period: string; rate_value: number }[]) =>
   fetchJSON<{ ids: number[] }>(`/api/fiscal-years/${fyId}/reference-rates/bulk`, { method: "PUT", body: JSON.stringify(data) });
 
+export async function uploadReferenceRates(fyId: number, file: File): Promise<{ imported: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch(`/api/fiscal-years/${fyId}/reference-rates/upload`, { method: "POST", body: form });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+  }
+  return resp.json();
+}
+
 // Revenue
 export const listRevenue = (fyId: number, project?: string) => {
   const qs = project ? `?project=${encodeURIComponent(project)}` : "";
@@ -129,6 +150,33 @@ export const getAvailableCostAccounts = (fyId: number) =>
 export const getAvailableBaseAccounts = (fyId: number) =>
   fetchJSON<ChartAccount[]>(`/api/fiscal-years/${fyId}/available-base-accounts`);
 
+// Scenarios
+export const listScenarios = (fyId: number) =>
+  fetchJSON<Scenario[]>(`/api/fiscal-years/${fyId}/scenarios`);
+export const createScenario = (fyId: number, data: { name: string; description?: string }) =>
+  fetchJSON<Scenario & { id: number }>(`/api/fiscal-years/${fyId}/scenarios`, { method: "POST", body: JSON.stringify(data) });
+export const getScenario = (scenarioId: number) =>
+  fetchJSON<Scenario>(`/api/scenarios/${scenarioId}`);
+export const updateScenario = (scenarioId: number, data: { name?: string; description?: string }) =>
+  fetchJSON<{ ok: boolean }>(`/api/scenarios/${scenarioId}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteScenario = (scenarioId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/scenarios/${scenarioId}`, { method: "DELETE" });
+
+// Scenario Events
+export const listScenarioEvents = (scenarioId: number) =>
+  fetchJSON<ScenarioEvent[]>(`/api/scenarios/${scenarioId}/events`);
+export const createScenarioEvent = (scenarioId: number, data: {
+  effective_period: string; event_type?: string; project?: string;
+  delta_direct_labor?: number; delta_direct_labor_hrs?: number;
+  delta_subk?: number; delta_odc?: number; delta_travel?: number;
+  pool_deltas?: Record<string, number>; notes?: string;
+}) =>
+  fetchJSON<ScenarioEvent & { id: number }>(`/api/scenarios/${scenarioId}/events`, { method: "POST", body: JSON.stringify(data) });
+export const updateScenarioEvent = (eventId: number, data: Record<string, unknown>) =>
+  fetchJSON<{ ok: boolean }>(`/api/scenario-events/${eventId}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteScenarioEvent = (eventId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/scenario-events/${eventId}`, { method: "DELETE" });
+
 // Seed / Clear Test Data
 export const seedTestData = () =>
   fetchJSON<{ fiscal_year: string; fiscal_year_id: number; chart_accounts: number; rate_groups: number; pool_groups: number; pools: number; gl_mappings: number; base_accounts: number; csv_files: number }>(
@@ -138,3 +186,71 @@ export const clearTestData = () =>
   fetchJSON<{ deleted_fy: boolean; csv_files_removed: number }>(
     "/api/seed-test-data", { method: "DELETE" }
   );
+
+// Seed / Clear Demo Data (enterprise-scale)
+export const seedDemoData = () =>
+  fetchJSON<{ fiscal_years: number; fiscal_year_names: string[]; chart_accounts: number; pool_groups: number; pools: number; gl_mappings: number; base_accounts: number; scenarios: number; projects: number; periods: number; csv_files: number }>(
+    "/api/seed-demo-data", { method: "POST" }
+  );
+export const clearDemoData = () =>
+  fetchJSON<{ deleted_fiscal_years: number; csv_files_removed: number }>(
+    "/api/seed-demo-data", { method: "DELETE" }
+  );
+
+// Entities
+export const listEntities = (fyId: number, dataDir?: string) => {
+  const qs = dataDir ? `?data_dir=${encodeURIComponent(dataDir)}` : "";
+  return fetchJSON<string[]>(`/api/fiscal-years/${fyId}/entities${qs}`);
+};
+
+// Forecast Runs
+export const listForecastRuns = (fyId: number) =>
+  fetchJSON<ForecastRun[]>(`/api/fiscal-years/${fyId}/forecast-runs`);
+export const deleteForecastRun = (runId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/forecast-runs/${runId}`, { method: "DELETE" });
+export async function downloadForecastRun(runId: number): Promise<Blob> {
+  const resp = await fetch(`/api/forecast-runs/${runId}/download`);
+  if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`);
+  return resp.blob();
+}
+
+// PST Report
+export const getPSTReport = (fyId: number, selectedPeriod: string, scenario?: string) => {
+  const qs = new URLSearchParams({ selected_period: selectedPeriod });
+  if (scenario) qs.set("scenario", scenario);
+  return fetchJSON<PSTData>(`/api/fiscal-years/${fyId}/pst?${qs}`);
+};
+
+// Uploaded Files
+export const listUploadedFiles = (fyId: number) =>
+  fetchJSON<UploadedFile[]>(`/api/fiscal-years/${fyId}/files`);
+
+export async function uploadFYFile(fyId: number, fileType: string, file: File): Promise<UploadedFile> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("file_type", fileType);
+  const resp = await fetch(`/api/fiscal-years/${fyId}/files`, { method: "POST", body: form });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+  }
+  return resp.json();
+}
+
+export const deleteUploadedFile = (fileId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/files/${fileId}`, { method: "DELETE" });
+
+export async function downloadUploadedFile(fileId: number, fileName: string): Promise<void> {
+  const resp = await fetch(`/api/files/${fileId}/download`);
+  if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export const getStorageUsage = () =>
+  fetchJSON<StorageUsage>("/api/storage-usage");

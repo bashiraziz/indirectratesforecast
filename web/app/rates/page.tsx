@@ -13,20 +13,39 @@ import {
   listFiscalYears,
   listPoolGroups,
   listReferenceRates,
+  listScenarios,
   upsertReferenceRate,
   bulkUpsertReferenceRates,
+  uploadReferenceRates,
 } from "@/lib/api";
-import type { FiscalYear, PoolGroup, ReferenceRate } from "@/lib/types";
+import type { FiscalYear, PoolGroup, ReferenceRate, Scenario } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+interface RateTableEntry {
+  periods: string[];
+  rows: { [rowName: string]: number[] };
+}
+
 interface RatesTableData {
-  [rateName: string]: {
-    periods: string[];
-    rows: { [rowName: string]: number[] };
-  };
+  [rateName: string]: RateTableEntry;
+}
+
+interface PoolBaseData {
+  [colName: string]: { [period: string]: number };
+}
+
+interface RateDef {
+  pool: string[];
+  base: string;
+}
+
+interface DrilldownInfo {
+  rateName: string;
+  period: string;
+  rateValue: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +158,7 @@ function RateEntryDialog({
   existingRates: ReferenceRate[];
   onSaved: () => void;
 }) {
-  const [rateType, setRateType] = useState<"budget" | "provisional">("budget");
+  const [rateType, setRateType] = useState<"budget" | "provisional" | "threshold">("budget");
   const [selectedPG, setSelectedPG] = useState("");
   const [period, setPeriod] = useState("");
   const [rateValue, setRateValue] = useState("");
@@ -182,10 +201,11 @@ function RateEntryDialog({
             <select
               className="w-full mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={rateType}
-              onChange={(e) => setRateType(e.target.value as "budget" | "provisional")}
+              onChange={(e) => setRateType(e.target.value as "budget" | "provisional" | "threshold")}
             >
               <option value="budget">Budget</option>
               <option value="provisional">Provisional</option>
+              <option value="threshold">Threshold (max acceptable)</option>
             </select>
           </div>
           <div>
@@ -256,14 +276,158 @@ function RateEntryDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Bulk Upload Dialog
+// ---------------------------------------------------------------------------
+
+const RATE_UPLOAD_TEMPLATE = `pool_group_name,period,rate_type,rate_value
+Fringe,2025-01,budget,25.50
+Overhead,2025-01,budget,45.00
+G&A,2025-01,budget,15.00`;
+
+function RateUploadDialog({
+  open,
+  onClose,
+  fyId,
+  onUploaded,
+}: {
+  open: boolean;
+  onClose: () => void;
+  fyId: number;
+  onUploaded: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string[][] | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function handleFileChange(f: File | null) {
+    setFile(f);
+    setPreview(null);
+    setResult(null);
+    setError(null);
+    if (!f) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result as string;
+      const lines = text.trim().split("\n").map((l) => l.split(",").map((c) => c.trim()));
+      setPreview(lines.slice(0, 21)); // header + up to 20 rows
+    };
+    reader.readAsText(f);
+  }
+
+  async function handleUpload() {
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await uploadReferenceRates(fyId, file);
+      setResult(`Successfully imported ${res.imported} rates.`);
+      onUploaded();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function downloadTemplate() {
+    const blob = new Blob([RATE_UPLOAD_TEMPLATE], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "reference_rates_template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Bulk Upload Reference Rates">
+      <div className="flex flex-col gap-4">
+        <div className="text-xs text-muted-foreground">
+          Upload a CSV with columns: <code>pool_group_name, period, rate_type, rate_value</code>.
+          Rate values should be in percentage (e.g. 25.50 for 25.50%).
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            type="file"
+            accept=".csv"
+            onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+            className="flex-1 text-sm"
+          />
+          <button
+            onClick={downloadTemplate}
+            className="text-xs px-3 py-1 border border-input rounded-md"
+          >
+            Download Template
+          </button>
+        </div>
+
+        {preview && (
+          <div className="border border-border rounded-md overflow-auto max-h-48">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-accent/30">
+                  {preview[0]?.map((h, i) => (
+                    <th key={i} className="px-2 py-1 text-left font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.slice(1).map((row, ri) => (
+                  <tr key={ri} className="border-t border-border/50">
+                    {row.map((cell, ci) => (
+                      <td key={ci} className="px-2 py-1">{cell}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {preview.length > 20 && (
+              <div className="text-xs text-muted-foreground px-2 py-1">Showing first 20 rows...</div>
+            )}
+          </div>
+        )}
+
+        {error && (
+          <div className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md p-3 whitespace-pre-wrap max-h-40 overflow-auto">
+            {error}
+          </div>
+        )}
+
+        {result && (
+          <div className="text-xs text-green-500 bg-green-500/10 border border-green-500/20 rounded-md p-3">
+            {result}
+          </div>
+        )}
+
+        <button
+          onClick={handleUpload}
+          disabled={uploading || !file}
+          className="flex items-center justify-center gap-2"
+        >
+          {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Upload Rates
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Rate Comparison Table
 // ---------------------------------------------------------------------------
 function RateTable({
   rateName,
   data,
+  onCellClick,
 }: {
   rateName: string;
-  data: { periods: string[]; rows: { [rowName: string]: number[] } };
+  data: RateTableEntry;
+  onCellClick?: (period: string, rateValue: number) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const ROW_ORDER = ["Actual", "YTD", "Budget", "Provisional", "Var (Act-Bud)", "Var (Act-Prov)"];
@@ -296,6 +460,7 @@ function RateTable({
             <tbody>
               {rowNames.map((row) => {
                 const isVariance = row.startsWith("Var");
+                const isClickable = row === "Actual" && onCellClick;
                 return (
                   <tr
                     key={row}
@@ -307,7 +472,9 @@ function RateTable({
                     {data.rows[row].map((val, i) => (
                       <td
                         key={i}
-                        className={`text-right px-3 py-2 font-mono ${isVariance ? varianceClass(val) : ""}`}
+                        className={`text-right px-3 py-2 font-mono ${isVariance ? varianceClass(val) : ""} ${isClickable ? "cursor-pointer hover:bg-primary/10 transition-colors" : ""}`}
+                        onClick={isClickable ? () => onCellClick(data.periods[i], val) : undefined}
+                        title={isClickable ? "Click to see pool $ / base $ breakdown" : undefined}
                       >
                         {fmtPct(val)}
                       </td>
@@ -324,16 +491,135 @@ function RateTable({
 }
 
 // ---------------------------------------------------------------------------
+// Rate Drilldown Modal
+// ---------------------------------------------------------------------------
+function fmtDollar(v: number): string {
+  if (v === 0) return "—";
+  const neg = v < 0;
+  const abs = Math.abs(v);
+  const formatted = abs >= 1000
+    ? "$" + abs.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+    : "$" + abs.toFixed(2);
+  return neg ? `(${formatted})` : formatted;
+}
+
+function RateDrilldownModal({
+  drilldown,
+  pools,
+  bases,
+  rateDefs,
+  onClose,
+}: {
+  drilldown: DrilldownInfo;
+  pools: PoolBaseData;
+  bases: PoolBaseData;
+  rateDefs: { [rateName: string]: RateDef };
+  onClose: () => void;
+}) {
+  const def = rateDefs[drilldown.rateName];
+  if (!def) return null;
+
+  const poolCols = def.pool;
+  const baseCol = def.base;
+  const period = drilldown.period;
+
+  // Sum pool $ for this rate
+  const poolValues = poolCols.map((col) => ({
+    name: col,
+    value: pools[col]?.[period] ?? 0,
+  }));
+  const totalPool = poolValues.reduce((s, p) => s + p.value, 0);
+  const baseValue = bases[baseCol]?.[period] ?? 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-sidebar border border-border rounded-lg w-full max-w-md mx-4 p-5"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold m-0">
+            {drilldown.rateName} — {period}
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="text-xs text-muted-foreground mb-3">
+          <strong>Rate = Pool $ / Base $</strong>
+          <span className="float-right font-mono">
+            {(drilldown.rateValue * 100).toFixed(2)}%
+          </span>
+        </div>
+
+        {/* Pool $ breakdown */}
+        <div className="mb-4">
+          <div className="text-xs font-semibold mb-2 text-muted-foreground">
+            Pool $ (numerator)
+          </div>
+          <div className="space-y-1">
+            {poolValues.map((p) => (
+              <div
+                key={p.name}
+                className="flex justify-between text-xs px-2 py-1 rounded bg-accent/30"
+              >
+                <span>{p.name}</span>
+                <span className="font-mono">{fmtDollar(p.value)}</span>
+              </div>
+            ))}
+            {poolValues.length > 1 && (
+              <div className="flex justify-between text-xs px-2 py-1 rounded bg-accent/60 font-semibold">
+                <span>Total Pool</span>
+                <span className="font-mono">{fmtDollar(totalPool)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Base $ */}
+        <div className="mb-4">
+          <div className="text-xs font-semibold mb-2 text-muted-foreground">
+            Base $ (denominator)
+          </div>
+          <div className="flex justify-between text-xs px-2 py-1 rounded bg-accent/30">
+            <span>{baseCol}</span>
+            <span className="font-mono">{fmtDollar(baseValue)}</span>
+          </div>
+        </div>
+
+        {/* Calculation */}
+        <div className="border-t border-border pt-3 text-xs font-mono text-center text-muted-foreground">
+          {fmtDollar(totalPool)} / {fmtDollar(baseValue)} = {(drilldown.rateValue * 100).toFixed(2)}%
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Rates Page
 // ---------------------------------------------------------------------------
 export default function RatesPage() {
   const [selectedFY, setSelectedFY] = useState<FiscalYear | null>(null);
   const [poolGroups, setPoolGroups] = useState<PoolGroup[]>([]);
   const [refRates, setRefRates] = useState<ReferenceRate[]>([]);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [ratesData, setRatesData] = useState<RatesTableData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showRateEntry, setShowRateEntry] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [poolsData, setPoolsData] = useState<PoolBaseData | null>(null);
+  const [basesData, setBasesData] = useState<PoolBaseData | null>(null);
+  const [rateDefs, setRateDefs] = useState<{ [name: string]: RateDef }>({});
+  const [drilldown, setDrilldown] = useState<DrilldownInfo | null>(null);
 
   // Input dir for running forecast (user configurable)
   const [inputDir, setInputDir] = useState("data");
@@ -341,12 +627,20 @@ export default function RatesPage() {
 
   const loadMeta = useCallback(async () => {
     if (!selectedFY) return;
-    const [pgs, rates] = await Promise.all([
+    const [pgs, rates, scens] = await Promise.all([
       listPoolGroups(selectedFY.id),
       listReferenceRates(selectedFY.id),
+      listScenarios(selectedFY.id),
     ]);
     setPoolGroups(pgs);
     setRefRates(rates);
+    setScenarios(scens);
+    // Auto-detect data dir from FY name
+    if (selectedFY.name.startsWith("DEMO-")) {
+      setInputDir("data_demo");
+    } else if (selectedFY.name.includes("TEST")) {
+      setInputDir("data_test");
+    }
   }, [selectedFY]);
 
   useEffect(() => { loadMeta(); }, [loadMeta]);
@@ -356,6 +650,9 @@ export default function RatesPage() {
     setLoading(true);
     setError("");
     setRatesData(null);
+    setPoolsData(null);
+    setBasesData(null);
+    setRateDefs({});
     try {
       const params = new URLSearchParams({
         scenario,
@@ -366,8 +663,20 @@ export default function RatesPage() {
         const text = await resp.text();
         throw new Error(text || `HTTP ${resp.status}`);
       }
-      const data: RatesTableData = await resp.json();
-      setRatesData(data);
+      const raw = await resp.json() as Record<string, unknown>;
+
+      // Extract pool/base/rateDef metadata
+      const pools = raw._pools as PoolBaseData | undefined;
+      const bases = raw._bases as PoolBaseData | undefined;
+      const defs = raw._rate_defs as { [name: string]: RateDef } | undefined;
+      delete raw._pools;
+      delete raw._bases;
+      delete raw._rate_defs;
+
+      setRatesData(raw as RatesTableData);
+      if (pools) setPoolsData(pools);
+      if (bases) setBasesData(bases);
+      if (defs) setRateDefs(defs);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -380,6 +689,7 @@ export default function RatesPage() {
   // Summary cards from reference rates
   const budgetSummary = refRates.filter((r) => r.rate_type === "budget");
   const provSummary = refRates.filter((r) => r.rate_type === "provisional");
+  const thresholdSummary = refRates.filter((r) => r.rate_type === "threshold");
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -393,7 +703,7 @@ export default function RatesPage() {
       {selectedFY && (
         <>
           {/* Reference Rates Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div className="border border-border rounded-lg p-4 bg-card">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold m-0">Budget Rates</h3>
@@ -438,25 +748,44 @@ export default function RatesPage() {
                 </div>
               )}
             </div>
+            <div className="border border-border rounded-lg p-4 bg-card">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold m-0">Threshold Rates</h3>
+                <span className="text-xs text-muted-foreground">
+                  {thresholdSummary.length} entries
+                </span>
+              </div>
+              {thresholdSummary.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No threshold rates set.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {[...new Set(thresholdSummary.map((r) => r.pool_group_name))].map((pg) => {
+                    const count = thresholdSummary.filter((r) => r.pool_group_name === pg).length;
+                    return (
+                      <span key={pg} className="text-xs px-2 py-1 bg-accent rounded">
+                        {pg}: {count} periods
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Controls */}
           <div className="flex flex-wrap items-end gap-3 mb-6">
             <div>
-              <label className="text-xs">Input Directory</label>
-              <input
-                className="mt-1 text-sm px-3 py-1.5 w-40"
-                value={inputDir}
-                onChange={(e) => setInputDir(e.target.value)}
-              />
-            </div>
-            <div>
               <label className="text-xs">Scenario</label>
-              <input
-                className="mt-1 text-sm px-3 py-1.5 w-28"
+              <select
+                className="mt-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm"
                 value={scenario}
                 onChange={(e) => setScenario(e.target.value)}
-              />
+              >
+                {scenarios.length === 0 && <option value="Base">Base</option>}
+                {scenarios.map((s) => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))}
+              </select>
             </div>
             <button
               onClick={loadRatesTable}
@@ -472,6 +801,12 @@ export default function RatesPage() {
             >
               <Plus className="w-3 h-3" /> Edit Reference Rates
             </button>
+            <button
+              onClick={() => setShowUpload(true)}
+              className="flex items-center gap-2 text-sm px-4 py-1.5 bg-secondary!"
+            >
+              <Plus className="w-3 h-3" /> Bulk Upload
+            </button>
           </div>
 
           {error && <div className="error mb-4">{error}</div>}
@@ -480,9 +815,27 @@ export default function RatesPage() {
           {ratesData && rateNames.length > 0 && (
             <div>
               {rateNames.map((name) => (
-                <RateTable key={name} rateName={name} data={ratesData[name]} />
+                <RateTable
+                  key={name}
+                  rateName={name}
+                  data={ratesData[name]}
+                  onCellClick={poolsData ? (period, rateValue) => {
+                    setDrilldown({ rateName: name, period, rateValue });
+                  } : undefined}
+                />
               ))}
             </div>
+          )}
+
+          {/* Rate Drilldown Modal */}
+          {drilldown && poolsData && basesData && (
+            <RateDrilldownModal
+              drilldown={drilldown}
+              pools={poolsData}
+              bases={basesData}
+              rateDefs={rateDefs}
+              onClose={() => setDrilldown(null)}
+            />
           )}
 
           {ratesData && rateNames.length === 0 && (
@@ -506,6 +859,15 @@ export default function RatesPage() {
             existingRates={refRates}
             onSaved={() => {
               loadMeta();
+            }}
+          />
+          <RateUploadDialog
+            open={showUpload}
+            onClose={() => setShowUpload(false)}
+            fyId={selectedFY.id}
+            onUploaded={() => {
+              loadMeta();
+              setShowUpload(false);
             }}
           />
         </>

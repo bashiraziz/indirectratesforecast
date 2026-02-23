@@ -20,6 +20,9 @@ def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
 def build_psr(
     project_impacts: pd.DataFrame,
     revenue_data: list[dict[str, Any]],
+    fy_start: str | None = None,
+    fy_end: str | None = None,
+    allowed_projects: list[str] | None = None,
 ) -> pd.DataFrame:
     """Build a Project Status Report from forecast impacts and revenue.
 
@@ -28,6 +31,10 @@ def build_psr(
             Period, Project, DirectLabor$, Subk, ODC, Travel,
             <rate>$ columns (indirect dollars), LoadedCost$
         revenue_data: list of dicts with keys: period, project, revenue
+        fy_start: Optional FY start period (YYYY-MM) to scope results
+        fy_end: Optional FY end period (YYYY-MM) to scope results
+        allowed_projects: Optional list of projects to include (filters out
+            run-rate projections for projects not active in this FY)
 
     Returns:
         DataFrame with columns:
@@ -38,6 +45,14 @@ def build_psr(
 
     # Ensure Period is string for merging
     impacts["Period"] = impacts["Period"].astype(str)
+
+    # Scope to FY date range if provided
+    if fy_start and fy_end:
+        impacts = impacts[(impacts["Period"] >= fy_start) & (impacts["Period"] <= fy_end)]
+
+    # Filter to allowed projects (e.g. only those with actuals in this FY)
+    if allowed_projects is not None:
+        impacts = impacts[impacts["Project"].isin(allowed_projects)]
 
     # Build revenue DataFrame
     if revenue_data:

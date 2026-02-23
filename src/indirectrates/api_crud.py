@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+import csv
+import io
+import re
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from . import db
@@ -16,15 +20,34 @@ router = APIRouter(prefix="/api")
 # Helpers
 # ---------------------------------------------------------------------------
 
-DB_PATH = db.DEFAULT_DB_PATH
-
 
 def _conn():
-    return db.get_connection(DB_PATH)
+    return db.get_connection()
 
 
 def _404(item: str):
     raise HTTPException(status_code=404, detail=f"{item} not found")
+
+
+def get_current_user(request: Request) -> str | None:
+    """Extract user ID from X-User-ID header (set by Next.js middleware)."""
+    return request.headers.get("X-User-ID") or None
+
+
+def require_auth(request: Request) -> str:
+    """Raise 401 if no authenticated user."""
+    user_id = get_current_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user_id
+
+
+def _check_fy_ownership(conn, fy_id: int, user_id: str | None) -> dict[str, Any]:
+    """Return FY or raise 404. If user_id given, also validates ownership."""
+    fy = db.get_fiscal_year(conn, fy_id, user_id=user_id)
+    if not fy:
+        raise HTTPException(status_code=404, detail="Fiscal year not found")
+    return fy
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +103,7 @@ class GLMappingCreate(BaseModel):
 
 
 class ReferenceRateUpsert(BaseModel):
-    rate_type: str  # budget, provisional, forward_pricing
+    rate_type: str
     pool_group_name: str
     period: str
     rate_value: float
@@ -124,34 +147,87 @@ class BaseAccountCreate(BaseModel):
     notes: str = ""
 
 
+class ScenarioCreate(BaseModel):
+    name: str
+    description: str = ""
+
+
+class ScenarioUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class ScenarioEventCreate(BaseModel):
+    effective_period: str
+    event_type: str = "ADJUST"
+    project: str = ""
+    delta_direct_labor: float = 0
+    delta_direct_labor_hrs: float = 0
+    delta_subk: float = 0
+    delta_odc: float = 0
+    delta_travel: float = 0
+    pool_deltas: dict[str, float] = {}
+    notes: str = ""
+
+
+class ScenarioEventUpdate(BaseModel):
+    effective_period: str | None = None
+    event_type: str | None = None
+    project: str | None = None
+    delta_direct_labor: float | None = None
+    delta_direct_labor_hrs: float | None = None
+    delta_subk: float | None = None
+    delta_odc: float | None = None
+    delta_travel: float | None = None
+    pool_deltas: dict[str, float] | None = None
+    notes: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Dashboard Summary
+# ---------------------------------------------------------------------------
+
+@router.get("/dashboard-summary")
+def dashboard_summary(request: Request):
+    user_id = get_current_user(request)
+    conn = _conn()
+    try:
+        return db.get_dashboard_summary(conn, user_id=user_id)
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Fiscal Years
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years")
-def list_fiscal_years():
+def list_fiscal_years(request: Request):
+    user_id = get_current_user(request)
     conn = _conn()
     try:
-        return db.list_fiscal_years(conn)
+        return db.list_fiscal_years(conn, user_id=user_id)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years", status_code=201)
-def create_fiscal_year(body: FiscalYearCreate):
+def create_fiscal_year(body: FiscalYearCreate, request: Request):
+    user_id = get_current_user(request) or ""
     conn = _conn()
     try:
-        fy_id = db.create_fiscal_year(conn, body.name, body.start_month, body.end_month)
+        fy_id = db.create_fiscal_year(conn, body.name, body.start_month, body.end_month, user_id=user_id)
         return {"id": fy_id, **body.model_dump()}
     finally:
         conn.close()
 
 
 @router.get("/fiscal-years/{fy_id}")
-def get_fiscal_year(fy_id: int):
+def get_fiscal_year(fy_id: int, request: Request):
+    user_id = get_current_user(request)
     conn = _conn()
     try:
-        fy = db.get_fiscal_year(conn, fy_id)
+        fy = db.get_fiscal_year(conn, fy_id, user_id=user_id)
         if not fy:
             _404("Fiscal year")
         return fy
@@ -160,9 +236,11 @@ def get_fiscal_year(fy_id: int):
 
 
 @router.delete("/fiscal-years/{fy_id}")
-def delete_fiscal_year(fy_id: int):
+def delete_fiscal_year(fy_id: int, request: Request):
+    user_id = get_current_user(request)
     conn = _conn()
     try:
+        _check_fy_ownership(conn, fy_id, user_id)
         if not db.delete_fiscal_year(conn, fy_id):
             _404("Fiscal year")
         return {"ok": True}
@@ -175,13 +253,11 @@ def delete_fiscal_year(fy_id: int):
 # ---------------------------------------------------------------------------
 
 @router.post("/fiscal-years/{fy_id}/copy-setup", status_code=201)
-def copy_fy_setup(fy_id: int, body: CopyFYSetup):
+def copy_fy_setup(fy_id: int, body: CopyFYSetup, request: Request):
+    user_id = get_current_user(request)
     conn = _conn()
     try:
-        # Verify both FYs exist
-        target = db.get_fiscal_year(conn, fy_id)
-        if not target:
-            _404("Target fiscal year")
+        target = _check_fy_ownership(conn, fy_id, user_id)
         source = db.get_fiscal_year(conn, body.source_fy_id)
         if not source:
             _404("Source fiscal year")
@@ -243,8 +319,9 @@ def delete_rate_group(rg_id: int):
 def list_pool_groups_by_rate_group(rg_id: int):
     conn = _conn()
     try:
-        # Look up the rate group to get its fiscal_year_id
-        row = conn.execute("SELECT fiscal_year_id FROM rate_groups WHERE id = ?", (rg_id,)).fetchone()
+        with conn.cursor() as cur:
+            cur.execute("SELECT fiscal_year_id FROM rate_groups WHERE id = %s", (rg_id,))
+            row = cur.fetchone()
         if not row:
             _404("Rate group")
         return db.list_pool_groups(conn, row["fiscal_year_id"], rate_group_id=rg_id)
@@ -446,6 +523,159 @@ def bulk_upsert_reference_rates(fy_id: int, body: list[ReferenceRateUpsert]):
         conn.close()
 
 
+_VALID_RATE_TYPES = {"budget", "provisional", "threshold", "forward_pricing"}
+_PERIOD_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+
+
+@router.post("/fiscal-years/{fy_id}/reference-rates/upload", status_code=201)
+async def upload_reference_rates(fy_id: int, file: UploadFile = File(...)):
+    content = (await file.read()).decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(content))
+
+    required_cols = {"pool_group_name", "period", "rate_type", "rate_value"}
+    if not reader.fieldnames or not required_cols.issubset(set(reader.fieldnames)):
+        missing = required_cols - set(reader.fieldnames or [])
+        raise HTTPException(status_code=400, detail=f"Missing required columns: {', '.join(sorted(missing))}")
+
+    conn = _conn()
+    try:
+        pgs = db.list_pool_groups(conn, fy_id)
+    finally:
+        conn.close()
+    valid_pg_names = {pg["name"] for pg in pgs}
+
+    rows: list[dict] = []
+    errors: list[str] = []
+    for i, raw in enumerate(reader, start=2):
+        pg = (raw.get("pool_group_name") or "").strip()
+        period = (raw.get("period") or "").strip()
+        rt = (raw.get("rate_type") or "").strip().lower()
+        rv_str = (raw.get("rate_value") or "").strip()
+
+        row_errors: list[str] = []
+        if not pg:
+            row_errors.append("pool_group_name is empty")
+        elif pg not in valid_pg_names:
+            row_errors.append(f"pool_group_name '{pg}' not found")
+        if not _PERIOD_RE.match(period):
+            row_errors.append(f"invalid period '{period}' (expected YYYY-MM)")
+        if rt not in _VALID_RATE_TYPES:
+            row_errors.append(f"invalid rate_type '{rt}' (expected: {', '.join(sorted(_VALID_RATE_TYPES))})")
+        try:
+            rv = float(rv_str) / 100.0
+        except (ValueError, TypeError):
+            row_errors.append(f"invalid rate_value '{rv_str}'")
+            rv = 0.0
+
+        if row_errors:
+            errors.append(f"Row {i}: {'; '.join(row_errors)}")
+        else:
+            rows.append({"rate_type": rt, "pool_group_name": pg, "period": period, "rate_value": rv})
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors, "valid_rows": len(rows)})
+
+    conn = _conn()
+    try:
+        count = db.bulk_upsert_reference_rates_atomic(conn, fy_id, rows)
+        return {"imported": count}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Entities (from GL_Actuals on disk or uploaded file)
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/entities")
+def list_entities(fy_id: int, data_dir: str = "data"):
+    conn = _conn()
+    try:
+        fy = db.get_fiscal_year(conn, fy_id)
+        if not fy:
+            _404("Fiscal year")
+        # Try uploaded GL_Actuals first
+        uploaded = db.get_latest_uploaded_file(conn, fy_id, "gl_actuals")
+    finally:
+        conn.close()
+
+    import pandas as pd
+
+    if uploaded:
+        try:
+            df = pd.read_csv(io.BytesIO(uploaded["content"]), dtype={"Account": str})
+            if "Entity" in df.columns:
+                return sorted(df["Entity"].dropna().astype(str).unique().tolist())
+        except Exception:
+            pass
+
+    gl_path = Path(data_dir) / "GL_Actuals.csv"
+    if not gl_path.exists():
+        return []
+    try:
+        df = pd.read_csv(gl_path, dtype={"Account": str})
+        if "Entity" not in df.columns:
+            return []
+        return sorted(df["Entity"].dropna().astype(str).unique().tolist())
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Forecast Runs
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/forecast-runs")
+def list_forecast_runs(fy_id: int):
+    conn = _conn()
+    try:
+        return db.list_forecast_runs(conn, fy_id)
+    finally:
+        conn.close()
+
+
+@router.get("/forecast-runs/{run_id}")
+def get_forecast_run(run_id: int):
+    conn = _conn()
+    try:
+        run = db.get_forecast_run(conn, run_id)
+        if not run:
+            _404("Forecast run")
+        result = {k: v for k, v in run.items() if k != "output_zip"}
+        result["zip_size"] = len(run["output_zip"]) if run.get("output_zip") else 0
+        return result
+    finally:
+        conn.close()
+
+
+@router.get("/forecast-runs/{run_id}/download")
+def download_forecast_run(run_id: int):
+    from fastapi.responses import Response as FastResponse
+    conn = _conn()
+    try:
+        run = db.get_forecast_run(conn, run_id)
+        if not run or not run.get("output_zip"):
+            _404("Forecast run")
+        return FastResponse(
+            content=run["output_zip"],
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="forecast_run_{run_id}.zip"'},
+        )
+    finally:
+        conn.close()
+
+
+@router.delete("/forecast-runs/{run_id}")
+def delete_forecast_run(run_id: int):
+    conn = _conn()
+    try:
+        if not db.delete_forecast_run(conn, run_id):
+            _404("Forecast run")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Revenue
 # ---------------------------------------------------------------------------
@@ -633,6 +863,121 @@ def get_available_base_accounts(fy_id: int):
 
 
 # ---------------------------------------------------------------------------
+# Scenarios
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/scenarios")
+def list_scenarios(fy_id: int):
+    conn = _conn()
+    try:
+        return db.list_scenarios(conn, fy_id)
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/scenarios", status_code=201)
+def create_scenario(fy_id: int, body: ScenarioCreate):
+    conn = _conn()
+    try:
+        sid = db.create_scenario(conn, fy_id, body.name, body.description)
+        return {"id": sid, "fiscal_year_id": fy_id, **body.model_dump()}
+    finally:
+        conn.close()
+
+
+@router.get("/scenarios/{scenario_id}")
+def get_scenario(scenario_id: int):
+    conn = _conn()
+    try:
+        s = db.get_scenario(conn, scenario_id)
+        if not s:
+            _404("Scenario")
+        return s
+    finally:
+        conn.close()
+
+
+@router.put("/scenarios/{scenario_id}")
+def update_scenario(scenario_id: int, body: ScenarioUpdate):
+    conn = _conn()
+    try:
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        if not db.update_scenario(conn, scenario_id, **updates):
+            _404("Scenario")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.delete("/scenarios/{scenario_id}")
+def delete_scenario(scenario_id: int):
+    conn = _conn()
+    try:
+        if not db.delete_scenario(conn, scenario_id):
+            _404("Scenario")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Scenario Events
+# ---------------------------------------------------------------------------
+
+@router.get("/scenarios/{scenario_id}/events")
+def list_scenario_events(scenario_id: int):
+    conn = _conn()
+    try:
+        return db.list_scenario_events(conn, scenario_id)
+    finally:
+        conn.close()
+
+
+@router.post("/scenarios/{scenario_id}/events", status_code=201)
+def create_scenario_event(scenario_id: int, body: ScenarioEventCreate):
+    import json
+    conn = _conn()
+    try:
+        eid = db.create_scenario_event(
+            conn, scenario_id,
+            body.effective_period, body.event_type, body.project,
+            body.delta_direct_labor, body.delta_direct_labor_hrs,
+            body.delta_subk, body.delta_odc, body.delta_travel,
+            json.dumps(body.pool_deltas), body.notes,
+        )
+        return {"id": eid, "scenario_id": scenario_id, **body.model_dump()}
+    finally:
+        conn.close()
+
+
+@router.put("/scenario-events/{event_id}")
+def update_scenario_event(event_id: int, body: ScenarioEventUpdate):
+    conn = _conn()
+    try:
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        if not db.update_scenario_event(conn, event_id, **updates):
+            _404("Scenario event")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.delete("/scenario-events/{event_id}")
+def delete_scenario_event(event_id: int):
+    conn = _conn()
+    try:
+        if not db.delete_scenario_event(conn, event_id):
+            _404("Scenario event")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Seed / Clear Test Data
 # ---------------------------------------------------------------------------
 
@@ -660,36 +1005,58 @@ def clear_test_data(data_dir: str = "data_test"):
 
 
 # ---------------------------------------------------------------------------
+# Seed / Clear Demo Data
+# ---------------------------------------------------------------------------
+
+@router.post("/seed-demo-data", status_code=201)
+def seed_demo_data(data_dir: str = "data_demo"):
+    from .demo_data import seed_demo_data as _seed
+    conn = _conn()
+    try:
+        result = _seed(conn, Path(data_dir))
+        if "error" in result:
+            raise HTTPException(status_code=409, detail=result["error"])
+        return result
+    finally:
+        conn.close()
+
+
+@router.delete("/seed-demo-data")
+def clear_demo_data(data_dir: str = "data_demo"):
+    from .demo_data import clear_demo_data as _clear
+    conn = _conn()
+    try:
+        return _clear(conn, Path(data_dir))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Rates Table (comparison view)
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/rates-table")
 def get_rates_table(
     fy_id: int,
+    request: Request,
     scenario: str = "Base",
     forecast_months: int = 12,
     run_rate_months: int = 3,
     input_dir: str | None = None,
 ):
-    """Return rates comparison data: Actual vs YTD vs Budget vs Provisional."""
     from .agents import AnalystAgent, PlannerAgent
     from .config import RateConfig, default_rate_config
     from .ytd import compute_ytd_rates, build_rates_comparison_table
 
+    user_id = get_current_user(request)
     conn = _conn()
     try:
-        fy = db.get_fiscal_year(conn, fy_id)
-        if not fy:
-            _404("Fiscal year")
-
-        # Try DB config first, fall back to default
+        fy = _check_fy_ownership(conn, fy_id, user_id)
         raw_config = db.build_rate_config_from_db(conn, fy_id)
         if raw_config["rates"]:
             cfg = RateConfig.from_mapping(raw_config)
         else:
             cfg = default_rate_config()
-
-        # Load reference rates
         ref_rates = db.list_reference_rates(conn, fy_id)
         budget_rates: dict[str, dict[str, float]] = {}
         prov_rates: dict[str, dict[str, float]] = {}
@@ -701,24 +1068,74 @@ def get_rates_table(
         conn.close()
 
     if not input_dir:
-        raise HTTPException(status_code=400, detail="input_dir is required")
+        input_dir = "data_demo" if fy["name"].startswith("DEMO-") else "data"
 
     input_path = Path(input_dir)
     if not input_path.exists():
         raise HTTPException(status_code=400, detail=f"Input directory not found: {input_dir}")
 
     import pandas as pd
-
-    plan = PlannerAgent().plan(
-        scenario=scenario,
-        forecast_months=forecast_months,
-        run_rate_months=run_rate_months,
-        events_path=input_path / "Scenario_Events.csv",
-    )
-    results = AnalystAgent().run(input_dir=input_path, config=cfg, plan=plan)
-    result = next((r for r in results if r.scenario == scenario), results[0])
+    import shutil
+    import tempfile
 
     fy_start = pd.Period(fy["start_month"], freq="M")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_input = Path(tmp) / "inputs"
+        tmp_input.mkdir(parents=True, exist_ok=True)
+
+        fy_start_str = fy["start_month"]
+        fy_end_str = fy["end_month"]
+
+        conn2 = _conn()
+        try:
+            # Try uploaded files first
+            for file_type, fname in [("gl_actuals", "GL_Actuals.csv"), ("direct_costs", "Direct_Costs_By_Project.csv")]:
+                uf = db.get_latest_uploaded_file(conn2, fy_id, file_type)
+                if uf:
+                    df = pd.read_csv(io.BytesIO(uf["content"]))
+                    if "Period" in df.columns:
+                        df = df[(df["Period"] >= fy_start_str) & (df["Period"] <= fy_end_str)]
+                    df.to_csv(tmp_input / fname, index=False)
+                else:
+                    src = input_path / fname
+                    if src.exists():
+                        df = pd.read_csv(src)
+                        if "Period" in df.columns:
+                            df = df[(df["Period"] >= fy_start_str) & (df["Period"] <= fy_end_str)]
+                        df.to_csv(tmp_input / fname, index=False)
+
+            account_map_df = db.build_account_map_df_from_db(conn2, fy_id)
+            if not account_map_df.empty:
+                account_map_df.to_csv(tmp_input / "Account_Map.csv", index=False)
+            elif (input_path / "Account_Map.csv").exists():
+                shutil.copy2(input_path / "Account_Map.csv", tmp_input / "Account_Map.csv")
+
+            scenario_df = db.build_scenario_events_df_from_db(conn2, fy_id)
+            if not scenario_df.empty:
+                scenario_df.to_csv(tmp_input / "Scenario_Events.csv", index=False)
+            elif (input_path / "Scenario_Events.csv").exists():
+                shutil.copy2(input_path / "Scenario_Events.csv", tmp_input / "Scenario_Events.csv")
+        finally:
+            conn2.close()
+
+        if not (tmp_input / "Scenario_Events.csv").exists():
+            (tmp_input / "Scenario_Events.csv").write_text(
+                "Scenario,EffectivePeriod,Type,Project\nBase,2025-01,ADJUST,\n"
+            )
+
+        plan = PlannerAgent().plan(
+            scenario=scenario,
+            forecast_months=forecast_months,
+            run_rate_months=run_rate_months,
+            events_path=tmp_input / "Scenario_Events.csv",
+        )
+        from dataclasses import replace
+        plan = replace(plan, fy_start=fy_start)
+
+        results = AnalystAgent().run(input_dir=tmp_input, config=cfg, plan=plan)
+        result = next((r for r in results if r.scenario == scenario), results[0])
+
     rate_defs = {name: {"pool": rd.pool, "base": rd.base} for name, rd in cfg.rates.items()}
     ytd = compute_ytd_rates(result.pools, result.bases, rate_defs, fy_start)
 
@@ -727,71 +1144,139 @@ def get_rates_table(
         result.rates, ytd, budget_rates, prov_rates, rate_names
     )
 
-    # Convert to JSON-serializable format
     output: dict[str, Any] = {}
     for rate_name, table_df in comparison.items():
         output[rate_name] = {
             "periods": list(table_df.columns),
             "rows": {row_name: [float(v) for v in table_df.loc[row_name]] for row_name in table_df.index},
         }
+
+    pools_df = result.pools.copy()
+    pools_df.index = pools_df.index.astype(str)
+    bases_df = result.bases.copy()
+    bases_df.index = bases_df.index.astype(str)
+    output["_pools"] = {col: {p: round(float(v), 2) for p, v in pools_df[col].items()} for col in pools_df.columns}
+    output["_bases"] = {col: {p: round(float(v), 2) for p, v in bases_df[col].items()} for col in bases_df.columns}
+    output["_rate_defs"] = {name: {"pool": rd.pool, "base": rd.base} for name, rd in cfg.rates.items()}
+
     return output
 
 
 # ---------------------------------------------------------------------------
-# Project Status Report
+# Project Status Report (PSR)
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/psr")
 def get_psr(
     fy_id: int,
+    request: Request,
     scenario: str = "Base",
     forecast_months: int = 12,
     run_rate_months: int = 3,
     input_dir: str | None = None,
 ):
-    """Return Project Status Report: profitability per project with indirect allocation."""
+    import shutil
+    import tempfile
+    import pandas as pd
     from .agents import AnalystAgent, PlannerAgent
     from .config import RateConfig, default_rate_config
     from .psr import build_psr, build_psr_summary
 
+    user_id = get_current_user(request)
     conn = _conn()
     try:
-        fy = db.get_fiscal_year(conn, fy_id)
-        if not fy:
-            _404("Fiscal year")
-
-        # Rate config from DB or default
+        fy = _check_fy_ownership(conn, fy_id, user_id)
         raw_config = db.build_rate_config_from_db(conn, fy_id)
         if raw_config["rates"]:
             cfg = RateConfig.from_mapping(raw_config)
         else:
             cfg = default_rate_config()
-
-        # Load revenue data
+        account_map_df = db.build_account_map_df_from_db(conn, fy_id)
+        scenario_df = db.build_scenario_events_df_from_db(conn, fy_id)
         revenue_data = db.list_revenue(conn, fy_id)
     finally:
         conn.close()
 
     if not input_dir:
-        raise HTTPException(status_code=400, detail="input_dir is required")
+        input_dir = "data_demo" if fy["name"].startswith("DEMO-") else "data"
 
-    input_path = Path(input_dir)
-    if not input_path.exists():
+    disk_dir = Path(input_dir)
+    if not disk_dir.exists():
         raise HTTPException(status_code=400, detail=f"Input directory not found: {input_dir}")
 
-    plan = PlannerAgent().plan(
-        scenario=scenario,
-        forecast_months=forecast_months,
-        run_rate_months=run_rate_months,
-        events_path=input_path / "Scenario_Events.csv",
-    )
-    results = AnalystAgent().run(input_dir=input_path, config=cfg, plan=plan)
-    result = next((r for r in results if r.scenario == scenario), results[0])
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_input = Path(tmp) / "inputs"
+        tmp_input.mkdir(parents=True, exist_ok=True)
 
-    psr = build_psr(result.project_impacts, revenue_data)
+        fy_start_str = fy["start_month"]
+        fy_end_str = fy["end_month"]
+
+        conn2 = _conn()
+        try:
+            for file_type, fname in [("gl_actuals", "GL_Actuals.csv"), ("direct_costs", "Direct_Costs_By_Project.csv")]:
+                uf = db.get_latest_uploaded_file(conn2, fy_id, file_type)
+                if uf:
+                    df = pd.read_csv(io.BytesIO(uf["content"]))
+                    if "Period" in df.columns:
+                        df = df[(df["Period"] >= fy_start_str) & (df["Period"] <= fy_end_str)]
+                    df.to_csv(tmp_input / fname, index=False)
+                else:
+                    src = disk_dir / fname
+                    if src.exists():
+                        df = pd.read_csv(src)
+                        if "Period" in df.columns:
+                            df = df[(df["Period"] >= fy_start_str) & (df["Period"] <= fy_end_str)]
+                        df.to_csv(tmp_input / fname, index=False)
+        finally:
+            conn2.close()
+
+        if not account_map_df.empty:
+            account_map_df.to_csv(tmp_input / "Account_Map.csv", index=False)
+        elif (disk_dir / "Account_Map.csv").exists():
+            shutil.copy2(disk_dir / "Account_Map.csv", tmp_input / "Account_Map.csv")
+
+        if not scenario_df.empty:
+            scenario_df.to_csv(tmp_input / "Scenario_Events.csv", index=False)
+        elif (disk_dir / "Scenario_Events.csv").exists():
+            shutil.copy2(disk_dir / "Scenario_Events.csv", tmp_input / "Scenario_Events.csv")
+
+        if not (tmp_input / "Scenario_Events.csv").exists():
+            (tmp_input / "Scenario_Events.csv").write_text(
+                "Scenario,EffectivePeriod,Type,Project,DeltaDirectLabor$,DeltaDirectLaborHrs,"
+                "DeltaSubk,DeltaODC,DeltaTravel,DeltaPoolFringe,DeltaPoolOverhead,DeltaPoolGA,Notes\n"
+                "Base,2025-01,ADJUST,,0,0,0,0,0,0,0,0,No changes\n"
+            )
+
+        plan = PlannerAgent().plan(
+            scenario=scenario,
+            forecast_months=forecast_months,
+            run_rate_months=run_rate_months,
+            events_path=tmp_input / "Scenario_Events.csv",
+        )
+
+        from dataclasses import replace
+        plan = replace(plan, fy_start=pd.Period(fy["start_month"], freq="M"))
+
+        results = AnalystAgent().run(input_dir=tmp_input, config=cfg, plan=plan)
+        result = next((r for r in results if r.scenario == scenario), results[0])
+
+    dc_path = disk_dir / "Direct_Costs_By_Project.csv"
+    allowed_projects = None
+    if dc_path.exists():
+        dc_df = pd.read_csv(dc_path)
+        dc_fy = dc_df[
+            (dc_df["Period"] >= fy["start_month"])
+            & (dc_df["Period"] <= fy["end_month"])
+        ]
+        allowed_projects = sorted(dc_fy["Project"].unique().tolist())
+
+    psr = build_psr(
+        result.project_impacts, revenue_data,
+        fy_start=fy["start_month"], fy_end=fy["end_month"],
+        allowed_projects=allowed_projects,
+    )
     summary = build_psr_summary(psr)
 
-    # Convert to JSON-serializable
     detail_records = []
     for _, row in psr.iterrows():
         detail_records.append({
@@ -826,36 +1311,261 @@ def get_psr(
 
 
 # ---------------------------------------------------------------------------
-# DB-based Forecast (runs existing engine with DB config)
+# PST Report (Project Status by Time)
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/pst")
+def get_pst(
+    fy_id: int,
+    request: Request,
+    selected_period: str = "",
+    scenario: str = "Base",
+    forecast_months: int = 12,
+    run_rate_months: int = 3,
+    input_dir: str | None = None,
+):
+    import shutil
+    import tempfile
+    import pandas as pd
+    from .agents import AnalystAgent, PlannerAgent
+    from .config import RateConfig, default_rate_config
+    from .pst import build_pst_report
+
+    user_id = get_current_user(request)
+    conn = _conn()
+    try:
+        fy = _check_fy_ownership(conn, fy_id, user_id)
+        raw_config = db.build_rate_config_from_db(conn, fy_id)
+        if raw_config["rates"]:
+            cfg = RateConfig.from_mapping(raw_config)
+        else:
+            cfg = default_rate_config()
+        account_map_df = db.build_account_map_df_from_db(conn, fy_id)
+        scenario_df = db.build_scenario_events_df_from_db(conn, fy_id)
+        ref_rates = db.list_reference_rates(conn, fy_id, rate_type="budget")
+    finally:
+        conn.close()
+
+    if not input_dir:
+        input_dir = "data_demo" if fy["name"].startswith("DEMO-") else "data"
+
+    disk_dir = Path(input_dir)
+    if not disk_dir.exists():
+        raise HTTPException(status_code=400, detail=f"Input directory not found: {input_dir}")
+
+    # Build budget rates dict
+    budget_rates: dict[str, dict[str, float]] = {}
+    for rr in ref_rates:
+        budget_rates.setdefault(rr["pool_group_name"], {})[rr["period"]] = rr["rate_value"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_input = Path(tmp) / "inputs"
+        tmp_input.mkdir(parents=True, exist_ok=True)
+
+        fy_start_str = fy["start_month"]
+        fy_end_str = fy["end_month"]
+
+        conn2 = _conn()
+        try:
+            for file_type, fname in [("gl_actuals", "GL_Actuals.csv"), ("direct_costs", "Direct_Costs_By_Project.csv")]:
+                uf = db.get_latest_uploaded_file(conn2, fy_id, file_type)
+                if uf:
+                    df = pd.read_csv(io.BytesIO(uf["content"]))
+                    if "Period" in df.columns:
+                        df = df[(df["Period"] >= fy_start_str) & (df["Period"] <= fy_end_str)]
+                    df.to_csv(tmp_input / fname, index=False)
+                else:
+                    src = disk_dir / fname
+                    if src.exists():
+                        df = pd.read_csv(src)
+                        if "Period" in df.columns:
+                            df = df[(df["Period"] >= fy_start_str) & (df["Period"] <= fy_end_str)]
+                        df.to_csv(tmp_input / fname, index=False)
+        finally:
+            conn2.close()
+
+        if not account_map_df.empty:
+            account_map_df.to_csv(tmp_input / "Account_Map.csv", index=False)
+        elif (disk_dir / "Account_Map.csv").exists():
+            shutil.copy2(disk_dir / "Account_Map.csv", tmp_input / "Account_Map.csv")
+
+        if not scenario_df.empty:
+            scenario_df.to_csv(tmp_input / "Scenario_Events.csv", index=False)
+        elif (disk_dir / "Scenario_Events.csv").exists():
+            shutil.copy2(disk_dir / "Scenario_Events.csv", tmp_input / "Scenario_Events.csv")
+
+        if not (tmp_input / "Scenario_Events.csv").exists():
+            (tmp_input / "Scenario_Events.csv").write_text(
+                "Scenario,EffectivePeriod,Type,Project,DeltaDirectLabor$,DeltaDirectLaborHrs,"
+                "DeltaSubk,DeltaODC,DeltaTravel,DeltaPoolFringe,DeltaPoolOverhead,DeltaPoolGA,Notes\n"
+                "Base,2025-01,ADJUST,,0,0,0,0,0,0,0,0,No changes\n"
+            )
+
+        plan = PlannerAgent().plan(
+            scenario=scenario,
+            forecast_months=forecast_months,
+            run_rate_months=run_rate_months,
+            events_path=tmp_input / "Scenario_Events.csv",
+        )
+        from dataclasses import replace
+        plan = replace(plan, fy_start=pd.Period(fy_start_str, freq="M"))
+
+        results = AnalystAgent().run(input_dir=tmp_input, config=cfg, plan=plan)
+        result = next((r for r in results if r.scenario == scenario), results[0])
+
+    # Determine selected_period default (last actual period in FY range)
+    if not selected_period:
+        all_periods = sorted(result.pools.index.astype(str).tolist())
+        fy_periods = [p for p in all_periods if fy_start_str <= p <= fy_end_str]
+        selected_period = fy_periods[-1] if fy_periods else (all_periods[-1] if all_periods else fy_end_str)
+
+    pst_result = build_pst_report(
+        pools=result.pools,
+        bases=result.bases,
+        project_impacts=result.project_impacts,
+        budget_rates=budget_rates,
+        selected_period=selected_period,
+        fy_start=fy_start_str,
+    )
+
+    # Serialize
+    records = []
+    for _, row in pst_result.iterrows():
+        records.append({col: (round(float(row[col]), 2) if isinstance(row[col], float) else row[col]) for col in pst_result.columns})
+
+    all_periods = sorted(result.pools.index.astype(str).tolist())
+    fy_periods = [p for p in all_periods if fy_start_str <= p <= fy_end_str]
+
+    return {
+        "categories": records,
+        "selected_period": selected_period,
+        "available_periods": fy_periods,
+        "fy_start": fy_start_str,
+        "fy_end": fy_end_str,
+    }
+
+
+# ---------------------------------------------------------------------------
+# File Upload / Download / Delete
+# ---------------------------------------------------------------------------
+
+@router.post("/fiscal-years/{fy_id}/files", status_code=201)
+async def upload_file(
+    fy_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    file_type: str = "gl_actuals",
+):
+    user_id = get_current_user(request)
+    content = await file.read()
+
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+
+        # Enforce storage quota for authenticated users
+        if user_id:
+            used = db.get_user_storage_bytes(conn, user_id)
+            if used + len(content) > db.MAX_STORAGE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Storage limit exceeded. Used: {used // 1024 // 1024}MB of {db.MAX_STORAGE_BYTES // 1024 // 1024}MB",
+                )
+
+        file_id = db.save_uploaded_file(conn, fy_id, file_type, file.filename or file_type, content)
+        return {"id": file_id, "file_type": file_type, "file_name": file.filename, "size_bytes": len(content)}
+    finally:
+        conn.close()
+
+
+@router.get("/fiscal-years/{fy_id}/files")
+def list_files(fy_id: int, request: Request):
+    user_id = get_current_user(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        return db.list_uploaded_files(conn, fy_id)
+    finally:
+        conn.close()
+
+
+@router.get("/files/{file_id}/download")
+def download_file(file_id: int):
+    from fastapi.responses import Response as FastResponse
+    conn = _conn()
+    try:
+        f = db.get_uploaded_file(conn, file_id)
+        if not f:
+            _404("File")
+        return FastResponse(
+            content=f["content"],
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{f["file_name"]}"'},
+        )
+    finally:
+        conn.close()
+
+
+@router.delete("/files/{file_id}")
+def delete_file(file_id: int):
+    conn = _conn()
+    try:
+        if not db.delete_uploaded_file(conn, file_id):
+            _404("File")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Storage usage
+# ---------------------------------------------------------------------------
+
+@router.get("/storage-usage")
+def get_storage_usage(request: Request):
+    user_id = get_current_user(request)
+    if not user_id:
+        return {"used_bytes": 0, "max_bytes": db.MAX_STORAGE_BYTES, "used_mb": 0}
+    conn = _conn()
+    try:
+        used = db.get_user_storage_bytes(conn, user_id)
+        return {
+            "used_bytes": used,
+            "max_bytes": db.MAX_STORAGE_BYTES,
+            "used_mb": round(used / 1024 / 1024, 2),
+            "max_mb": db.MAX_STORAGE_BYTES // 1024 // 1024,
+        }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# DB-based Forecast
 # ---------------------------------------------------------------------------
 
 @router.post("/fiscal-years/{fy_id}/forecast")
 def forecast_from_db(
     fy_id: int,
+    request: Request,
     scenario: str | None = None,
     forecast_months: int = 12,
     run_rate_months: int = 3,
     input_dir: str | None = None,
 ):
-    """Run forecast using pool config from DB. Still requires CSV inputs (via input_dir or prior upload)."""
     from .agents import AnalystAgent, PlannerAgent, ReporterAgent
     from .config import RateConfig
 
+    user_id = get_current_user(request)
     conn = _conn()
     try:
-        fy = db.get_fiscal_year(conn, fy_id)
-        if not fy:
-            _404("Fiscal year")
-
+        fy = _check_fy_ownership(conn, fy_id, user_id)
         raw_config = db.build_rate_config_from_db(conn, fy_id)
         if not raw_config["rates"]:
             raise HTTPException(status_code=400, detail="No pool groups configured for this fiscal year")
-
         cfg = RateConfig.from_mapping(raw_config)
     finally:
         conn.close()
 
-    # For now, require input_dir to be provided
     if not input_dir:
         raise HTTPException(status_code=400, detail="input_dir is required for DB-based forecast")
 

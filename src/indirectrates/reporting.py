@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -23,7 +24,7 @@ def write_narrative(path: str | Path, result: ForecastResult) -> None:
     last_actual_str = result.assumptions.get("last_actual_period")
     last_actual = pd.Period(last_actual_str, freq="M") if last_actual_str else None
     future = rates[rates.index > last_actual] if last_actual is not None else rates.tail(6)
-    current = rates[rates.index <= last_actual].tail(3) if last_actual is not None else rates.head(3)
+    current = rates[rates.index <= last_actual] if last_actual is not None else rates.head(3)
 
     def _avg(df: pd.DataFrame) -> dict[str, float]:
         if len(df.index) == 0:
@@ -63,15 +64,34 @@ def save_rate_charts(out_dir: str | Path, results: list[ForecastResult]) -> list
     if not results:
         return paths
 
+    # Determine actuals cutoff for vertical marker
+    last_actual_str = results[0].assumptions.get("last_actual_period")
+    last_actual_ts = pd.Period(last_actual_str, freq="M").to_timestamp() if last_actual_str else None
+
     rate_names = list(results[0].rates.columns)
     for rate_name in rate_names:
         plt.figure(figsize=(10, 4))
         for res in results:
             series = res.rates[rate_name].copy()
             x = series.index.to_timestamp()
-            plt.plot(x, series.values, label=res.scenario)
+            color = plt.plot(x, series.values, label=f"{res.scenario} (MTD)")[0].get_color()
+            # Overlay YTD as dashed line in same color
+            if res.ytd_rates is not None and rate_name in res.ytd_rates.columns:
+                ytd_series = res.ytd_rates[rate_name].copy()
+                ytd_x = ytd_series.index.to_timestamp()
+                plt.plot(ytd_x, ytd_series.values, color=color, linestyle="--", alpha=0.7, label=f"{res.scenario} (YTD)")
+        # Actuals vs Forecast cutoff line
+        if last_actual_ts is not None:
+            plt.axvline(x=last_actual_ts, color="gray", linestyle=":", linewidth=1, alpha=0.6)
+            ymin, ymax = plt.ylim()
+            plt.text(
+                last_actual_ts, ymax, "  Actuals | Forecast  ",
+                fontsize=7, color="gray", alpha=0.8, ha="center", va="top",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.7, edgecolor="gray"),
+            )
         plt.title(f"{rate_name} Rate Forecast")
         plt.ylabel("Rate")
+        plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=1))
         plt.grid(True, alpha=0.25)
         plt.legend()
         p = out_dir / f"rate_{_safe_filename(rate_name)}.png"
@@ -89,6 +109,8 @@ def write_excel_pack(path: str | Path, results: list[ForecastResult]) -> None:
 
     for res in results:
         _add_df_sheet(wb, f"{res.scenario} - Rates", _with_period_col(res.rates))
+        if res.ytd_rates is not None and not res.ytd_rates.empty:
+            _add_df_sheet(wb, f"{res.scenario} - YTD Rates", _with_period_col(res.ytd_rates))
         _add_df_sheet(wb, f"{res.scenario} - Pools", _with_period_col(res.pools))
         _add_df_sheet(wb, f"{res.scenario} - Bases", _with_period_col(res.bases))
         _add_df_sheet(wb, f"{res.scenario} - Impacts", res.project_impacts)

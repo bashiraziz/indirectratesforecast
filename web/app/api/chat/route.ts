@@ -31,9 +31,11 @@ export async function POST(req: Request) {
   }
 
   let messages: ChatMessage[];
+  let forecastContext: string | undefined;
   try {
     const body = await req.json();
     messages = body.messages;
+    forecastContext = body.forecastContext;
     if (!Array.isArray(messages) || messages.length === 0) {
       return Response.json(
         { error: "Request body must include a non-empty messages array" },
@@ -44,10 +46,15 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  let systemPrompt = SYSTEM_PROMPT;
+  if (forecastContext) {
+    systemPrompt += `\n\n--- CURRENT FORECAST DATA ---\nThe user has run a forecast. Below is the actual data from their run. Use this to answer questions with specific numbers, trends, and analysis. Reference specific periods, rates, and dollar amounts.\n\n${forecastContext}`;
+  }
+
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    systemInstruction: SYSTEM_PROMPT,
+    model: "gemini-2.5-flash",
+    systemInstruction: systemPrompt,
   });
 
   // Build chat history (all messages except the last user message)

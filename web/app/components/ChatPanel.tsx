@@ -8,7 +8,7 @@ interface Message {
   content: string;
 }
 
-export function ChatPanel() {
+export function ChatPanel({ forecastContext }: { forecastContext?: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -41,7 +41,7 @@ export function ChatPanel() {
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: updated }),
+        body: JSON.stringify({ messages: updated, forecastContext }),
       });
 
       if (!resp.ok) {
@@ -89,13 +89,12 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex flex-col h-[620px] border border-border rounded-lg overflow-hidden bg-card">
+    <div className="flex flex-col h-[340px] border border-border rounded-lg overflow-hidden bg-card">
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && (
-          <div className="text-muted-foreground text-sm text-center py-8">
-            Ask a question about indirect rates, pool structures, or cost
-            forecasting.
+          <div className="text-muted-foreground text-sm text-center py-4">
+            Ask about indirect rates, pool structures, or cost forecasting.
           </div>
         )}
         {messages.map((msg, i) => (

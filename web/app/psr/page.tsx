@@ -12,10 +12,11 @@ import {
 import {
   listFiscalYears,
   listRevenue,
+  listScenarios,
   upsertRevenue,
   importRevenue,
 } from "@/lib/api";
-import type { FiscalYear, RevenueRow } from "@/lib/types";
+import type { FiscalYear, RevenueRow, Scenario } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -460,7 +461,7 @@ export default function PSRPage() {
   const [error, setError] = useState("");
   const [showRevenue, setShowRevenue] = useState(false);
 
-  const [inputDir, setInputDir] = useState("data");
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [scenario, setScenario] = useState("Base");
   const [filterProject, setFilterProject] = useState("");
 
@@ -472,16 +473,34 @@ export default function PSRPage() {
 
   useEffect(() => { loadRevenue(); }, [loadRevenue]);
 
+  // Load scenarios for dropdown
+  const loadScenarios = useCallback(async () => {
+    if (!selectedFY) return;
+    try {
+      const sc = await listScenarios(selectedFY.id);
+      setScenarios(sc);
+      // Default to "Base" if available, else first scenario
+      if (sc.length > 0) {
+        const base = sc.find((s) => s.name === "Base");
+        setScenario(base ? base.name : sc[0].name);
+      } else {
+        setScenario("Base");
+      }
+    } catch {
+      setScenarios([]);
+      setScenario("Base");
+    }
+  }, [selectedFY]);
+
+  useEffect(() => { loadScenarios(); }, [loadScenarios]);
+
   async function loadPSR() {
     if (!selectedFY) return;
     setLoading(true);
     setError("");
     setPsrData(null);
     try {
-      const params = new URLSearchParams({
-        scenario,
-        input_dir: inputDir,
-      });
+      const params = new URLSearchParams({ scenario });
       const resp = await fetch(`/api/fiscal-years/${selectedFY.id}/psr?${params}`);
       if (!resp.ok) {
         const text = await resp.text();
@@ -524,20 +543,17 @@ export default function PSRPage() {
           {/* Controls */}
           <div className="flex flex-wrap items-end gap-3 mb-6">
             <div>
-              <label className="text-xs">Input Directory</label>
-              <input
-                className="mt-1 text-sm px-3 py-1.5 w-40"
-                value={inputDir}
-                onChange={(e) => setInputDir(e.target.value)}
-              />
-            </div>
-            <div>
               <label className="text-xs">Scenario</label>
-              <input
-                className="mt-1 text-sm px-3 py-1.5 w-28"
+              <select
+                className="mt-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm"
                 value={scenario}
                 onChange={(e) => setScenario(e.target.value)}
-              />
+              >
+                {scenarios.length === 0 && <option value="Base">Base</option>}
+                {scenarios.map((s) => (
+                  <option key={s.id} value={s.name}>{s.name}</option>
+                ))}
+              </select>
             </div>
             <button
               onClick={loadPSR}

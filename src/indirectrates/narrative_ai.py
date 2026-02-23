@@ -22,7 +22,7 @@ def _build_prompt(result: ForecastResult) -> str:
     last_actual_str = result.assumptions.get("last_actual_period")
     last_actual = pd.Period(last_actual_str, freq="M") if last_actual_str else None
     future = rates[rates.index > last_actual] if last_actual is not None else rates.tail(6)
-    current = rates[rates.index <= last_actual].tail(3) if last_actual is not None else rates.head(3)
+    current = rates[rates.index <= last_actual] if last_actual is not None else rates.head(3)
 
     def _avg(df: pd.DataFrame) -> dict[str, float]:
         if len(df.index) == 0:

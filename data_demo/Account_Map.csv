@@ -1,0 +1,53 @@
+Account,Pool,BaseCategory,IsUnallowable,Notes
+6100.01,Fringe,DL,False,Health Insurance
+6100.02,Fringe,DL,False,Dental & Vision
+6100.03,Fringe,DL,False,401k Match
+6100.04,Fringe,DL,False,Payroll Taxes (FICA/FUTA/SUTA)
+6100.05,Fringe,DL,False,Workers Compensation
+6100.06,Fringe,DL,False,PTO Accrual
+6100.07,Fringe,DL,False,Life & Disability Insurance
+7100.01,Overhead,DL,False,Rent & Facilities
+7100.02,Overhead,DL,False,Utilities
+7100.03,Overhead,DL,False,IT Infrastructure
+7100.04,Overhead,DL,False,Software Tools & Subscriptions
+7100.05,Overhead,DL,False,Depreciation
+7100.06,Overhead,DL,False,Building Maintenance
+7100.07,Overhead,DL,False,Telecommunications
+7100.08,Overhead,DL,False,Training & Development
+7100.09,Overhead,DL,False,Recruiting Costs
+7100.10,Overhead,DL,False,Facility Security
+5400.01,Material Handling,DL,False,ODC - Materials
+5400.02,Material Handling,DL,False,ODC - Equipment Purchases
+8200.01,B&P/IR&D,TCI,False,Proposal Labor
+8200.02,B&P/IR&D,TCI,False,Proposal Materials & Printing
+8300.01,B&P/IR&D,TCI,False,Research Labor
+8300.02,B&P/IR&D,TCI,False,Research Materials & Equipment
+8100.01,G&A,TCI,False,Executive Compensation
+8100.02,G&A,TCI,False,Accounting & Finance
+8100.03,G&A,TCI,False,Human Resources
+8100.04,G&A,TCI,False,Legal Services
+8100.05,G&A,TCI,False,Business Development
+8100.06,G&A,TCI,False,Marketing & Communications
+8100.07,G&A,TCI,False,Corporate Insurance
+8100.08,G&A,TCI,False,Audit & Compliance
+9100.01,Unallowable,DL,True,Entertainment
+9100.02,Unallowable,DL,True,Alcohol
+9100.03,Unallowable,DL,True,Lobbying
+9100.04,Unallowable,DL,True,Fines & Penalties
+9100.05,Unallowable,DL,True,Charitable Donations
+5100.01,Direct,Direct,False,Direct Labor - Engineers
+5100.02,Direct,Direct,False,Direct Labor - Sr Engineers
+5100.03,Direct,Direct,False,Direct Labor - Analysts
+5100.04,Direct,Direct,False,Direct Labor - Project Managers
+5100.05,Direct,Direct,False,Direct Labor - Architects
+5100.06,Direct,Direct,False,Direct Labor - QA/Test
+5100.07,Direct,Direct,False,Direct Labor - Admin Support
+5100.08,Direct,Direct,False,Direct Labor - Interns
+5200.01,Direct,Direct,False,Travel - Domestic
+5200.02,Direct,Direct,False,Travel - International
+5200.03,Direct,Direct,False,Travel - Per Diem & Lodging
+5300.01,Direct,Direct,False,Subcontracts - Major Subs
+5300.02,Direct,Direct,False,Subcontracts - Specialty Subs
+5300.03,Direct,Direct,False,Subcontracts - Consulting
+5400.03,Direct,Direct,False,ODC - Software Licenses
+5400.04,Direct,Direct,False,ODC - Office Supplies

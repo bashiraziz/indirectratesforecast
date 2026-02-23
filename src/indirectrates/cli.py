@@ -8,6 +8,7 @@ from rich.console import Console
 
 from .agents import AnalystAgent, PlannerAgent, ReporterAgent
 from .config import RateConfig, default_rate_config
+from . import db
 from .db import DEFAULT_DB_PATH, init_db
 from .synth import SynthSpec, generate_synthetic_dataset
 
@@ -50,6 +51,33 @@ def init_db_cmd(
     """Initialize the SQLite database (creates tables if they don't exist)."""
     path = init_db(db)
     console.print(f"Database initialized at {path}")
+
+
+@app.command()
+def demo(
+    out: Path = typer.Option("data_demo", help="Output directory for demo CSVs."),
+    seed: int = typer.Option(42, help="RNG seed."),
+):
+    """Generate realistic enterprise demo dataset (4 FYs, 30 projects, ~60 accounts)."""
+    from .demo_data import seed_demo_data as _seed
+
+    conn = db.get_connection(DEFAULT_DB_PATH)
+    try:
+        result = _seed(conn, out)
+        if "error" in result:
+            console.print(f"[red]{result['error']}[/red]")
+            raise typer.Exit(code=1)
+        console.print(
+            f"Seeded {result['fiscal_years']} fiscal years, "
+            f"{result['chart_accounts']} GL accounts, "
+            f"{result['pool_groups']} pool groups, "
+            f"{result['scenarios']} scenarios, "
+            f"{result['projects']} projects, "
+            f"{result['periods']} periods of actuals. "
+            f"CSVs written to {out}/"
+        )
+    finally:
+        conn.close()
 
 
 def _find_available_port(host: str, preferred: int) -> int:

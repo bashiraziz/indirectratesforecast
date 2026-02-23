@@ -1,36 +1,75 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from .agents import AnalystAgent, PlannerAgent, ReporterAgent
-from .api_crud import router as crud_router
+from .api_crud import router as crud_router, get_current_user
 from .config import RateConfig, default_rate_config
 from .db import (
     build_account_map_df_from_db,
     build_rate_config_from_db,
+    build_scenario_events_df_from_db,
     get_connection,
     get_fiscal_year,
+    get_latest_uploaded_file,
     init_db,
+    list_reference_rates,
+    save_forecast_run,
+    get_user_storage_bytes,
+    MAX_STORAGE_BYTES,
 )
 
-app = FastAPI(title="Indirect Rates Forecast API", version="0.2.0")
 
-# Ensure database tables exist on startup
-init_db()
+# ---------------------------------------------------------------------------
+# Rate limiter key: user_id from header if present, else remote IP
+# ---------------------------------------------------------------------------
+
+def _rate_key(request: Request) -> str:
+    user_id = request.headers.get("X-User-ID")
+    return user_id if user_id else get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_key)
+
+app = FastAPI(title="Indirect Rates Forecast API", version="0.3.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.on_event("startup")
+def startup():
+    """Initialize database tables on startup."""
+    try:
+        init_db()
+    except Exception as e:
+        import warnings
+        warnings.warn(f"DB init failed (is PostgreSQL running?): {e}")
+
+
+# ALLOWED_ORIGINS: comma-separated list of allowed origins.
+# Add your Vercel deployment URL here, e.g.:
+#   ALLOWED_ORIGINS=https://your-app.vercel.app,http://localhost:3000
+_default_origins = "http://localhost:3000,http://127.0.0.1:3000"
+_origins_env = os.environ.get("ALLOWED_ORIGINS", _default_origins)
+_allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,26 +83,50 @@ def healthz():
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Rate limit helpers
+# ---------------------------------------------------------------------------
+
+def _guest_limit() -> str:
+    return "5/minute"
+
+
+def _auth_limit() -> str:
+    return "20/minute"
+
+
+def _get_limit(request: Request) -> str:
+    user_id = request.headers.get("X-User-ID")
+    return _auth_limit() if user_id else _guest_limit()
+
+
 @app.post("/forecast")
+@limiter.limit(lambda request: _get_limit(request))
 async def forecast(
+    request: Request,
     scenario: Optional[str] = Form(default=None),
     forecast_months: int = Form(default=12),
     run_rate_months: int = Form(default=3),
     fiscal_year_id: Optional[int] = Form(default=None),
+    input_dir_path: Optional[str] = Form(default=None),
     inputs_zip: Optional[UploadFile] = File(default=None),
     gl_actuals: Optional[UploadFile] = File(default=None),
     account_map: Optional[UploadFile] = File(default=None),
     direct_costs: Optional[UploadFile] = File(default=None),
     scenario_events: Optional[UploadFile] = File(default=None),
     config_yaml: Optional[UploadFile] = File(default=None),
+    entity: Optional[str] = Form(default=None),
 ):
     scenario = (scenario or "").strip() or None
+    entity = (entity or "").strip() or None
+    user_id = get_current_user(request)
 
     # When fiscal_year_id is provided, load config from DB instead of uploads
+    fy = None
     if fiscal_year_id is not None:
         conn = get_connection()
         try:
-            fy = get_fiscal_year(conn, fiscal_year_id)
+            fy = get_fiscal_year(conn, fiscal_year_id, user_id=user_id)
             if not fy:
                 raise HTTPException(status_code=404, detail=f"Fiscal year {fiscal_year_id} not found")
             raw_cfg = build_rate_config_from_db(conn, fiscal_year_id)
@@ -77,6 +140,8 @@ async def forecast(
         cfg = await _load_config(config_yaml)
         account_map_df = None
 
+    disk_dir = Path(input_dir_path) if input_dir_path else None
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         input_dir = tmp_path / "inputs"
@@ -88,16 +153,68 @@ async def forecast(
             with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
                 zf.extractall(input_dir)
         else:
-            await _write_upload(gl_actuals, input_dir / "GL_Actuals.csv")
-            if account_map_df is not None:
-                # Write DB-generated Account_Map so the pipeline picks it up
-                account_map_df.to_csv(input_dir / "Account_Map.csv", index=False)
-            else:
-                await _write_upload(account_map, input_dir / "Account_Map.csv")
-            await _write_upload(direct_costs, input_dir / "Direct_Costs_By_Project.csv")
-            await _write_upload(scenario_events, input_dir / "Scenario_Events.csv")
+            # GL_Actuals: DB upload > fresh upload > disk
+            if gl_actuals is not None:
+                await _write_upload(gl_actuals, input_dir / "GL_Actuals.csv")
+            elif fiscal_year_id is not None:
+                conn = get_connection()
+                try:
+                    uf = get_latest_uploaded_file(conn, fiscal_year_id, "gl_actuals")
+                finally:
+                    conn.close()
+                if uf:
+                    (input_dir / "GL_Actuals.csv").write_bytes(uf["content"])
+                elif disk_dir and (disk_dir / "GL_Actuals.csv").exists():
+                    import shutil
+                    shutil.copy2(disk_dir / "GL_Actuals.csv", input_dir / "GL_Actuals.csv")
+            elif disk_dir and (disk_dir / "GL_Actuals.csv").exists():
+                import shutil
+                shutil.copy2(disk_dir / "GL_Actuals.csv", input_dir / "GL_Actuals.csv")
 
-        # If Scenario_Events.csv is missing, write a default no-op Base row
+            # Account_Map: DB-generated > uploaded > disk
+            if account_map_df is not None:
+                account_map_df.to_csv(input_dir / "Account_Map.csv", index=False)
+            elif account_map is not None:
+                await _write_upload(account_map, input_dir / "Account_Map.csv")
+            elif disk_dir and (disk_dir / "Account_Map.csv").exists():
+                import shutil
+                shutil.copy2(disk_dir / "Account_Map.csv", input_dir / "Account_Map.csv")
+
+            # Direct_Costs: DB upload > fresh upload > disk
+            if direct_costs is not None:
+                await _write_upload(direct_costs, input_dir / "Direct_Costs_By_Project.csv")
+            elif fiscal_year_id is not None:
+                conn = get_connection()
+                try:
+                    uf = get_latest_uploaded_file(conn, fiscal_year_id, "direct_costs")
+                finally:
+                    conn.close()
+                if uf:
+                    (input_dir / "Direct_Costs_By_Project.csv").write_bytes(uf["content"])
+                elif disk_dir and (disk_dir / "Direct_Costs_By_Project.csv").exists():
+                    import shutil
+                    shutil.copy2(disk_dir / "Direct_Costs_By_Project.csv", input_dir / "Direct_Costs_By_Project.csv")
+            elif disk_dir and (disk_dir / "Direct_Costs_By_Project.csv").exists():
+                import shutil
+                shutil.copy2(disk_dir / "Direct_Costs_By_Project.csv", input_dir / "Direct_Costs_By_Project.csv")
+
+            # Scenario_Events: fresh upload > disk
+            if scenario_events is not None:
+                await _write_upload(scenario_events, input_dir / "Scenario_Events.csv")
+            elif disk_dir and (disk_dir / "Scenario_Events.csv").exists():
+                import shutil
+                shutil.copy2(disk_dir / "Scenario_Events.csv", input_dir / "Scenario_Events.csv")
+
+        # Try loading Scenario_Events from DB scenarios
+        if not (input_dir / "Scenario_Events.csv").exists() and fiscal_year_id is not None:
+            conn = get_connection()
+            try:
+                scenario_df = build_scenario_events_df_from_db(conn, fiscal_year_id)
+                if not scenario_df.empty:
+                    scenario_df.to_csv(input_dir / "Scenario_Events.csv", index=False)
+            finally:
+                conn.close()
+
         if not (input_dir / "Scenario_Events.csv").exists():
             (input_dir / "Scenario_Events.csv").write_text(
                 "Scenario,EffectivePeriod,Type,Project,DeltaDirectLabor$,DeltaDirectLaborHrs,"
@@ -113,10 +230,56 @@ async def forecast(
             run_rate_months=int(run_rate_months),
             events_path=input_dir / "Scenario_Events.csv",
         )
-        results = AnalystAgent().run(input_dir=input_dir, config=cfg, plan=plan)
+
+        if fiscal_year_id is not None and fy:
+            import pandas as pd
+            from dataclasses import replace
+            plan = replace(plan, fy_start=pd.Period(fy["start_month"], freq="M"))
+
+        results = AnalystAgent().run(input_dir=input_dir, config=cfg, plan=plan, entity=entity)
+
+        if fiscal_year_id is not None:
+            conn = get_connection()
+            try:
+                ref_rates = list_reference_rates(conn, fiscal_year_id, rate_type="budget")
+                ref_thresholds = list_reference_rates(conn, fiscal_year_id, rate_type="threshold")
+            finally:
+                conn.close()
+            if ref_rates:
+                budget_map: dict = {}
+                for rr in ref_rates:
+                    budget_map.setdefault(rr["pool_group_name"], {})[rr["period"]] = rr["rate_value"]
+                for res in results:
+                    res.assumptions["budget_rates"] = budget_map
+            if ref_thresholds:
+                threshold_map: dict = {}
+                for rr in ref_thresholds:
+                    threshold_map.setdefault(rr["pool_group_name"], {})[rr["period"]] = rr["rate_value"]
+                for res in results:
+                    res.assumptions["rate_thresholds"] = threshold_map
+
         ReporterAgent().package(out_dir=out_dir, results=results)
 
         payload = _zip_dir_bytes(out_dir)
+
+        # Persist forecast run only for DB mode
+        if fiscal_year_id is not None:
+            import json as _json
+            assumptions_str = _json.dumps(results[0].assumptions, default=str) if results else "{}"
+            conn = get_connection()
+            try:
+                save_forecast_run(
+                    conn,
+                    fiscal_year_id=fiscal_year_id,
+                    scenario=scenario or "",
+                    forecast_months=int(forecast_months),
+                    run_rate_months=int(run_rate_months),
+                    assumptions_json=assumptions_str,
+                    output_zip=payload,
+                )
+            finally:
+                conn.close()
+
         return Response(
             content=payload,
             media_type="application/zip",

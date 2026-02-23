@@ -10,16 +10,21 @@ import {
   Calendar,
   ChevronDown,
   ChevronsDownUp,
+  Database,
   FileSpreadsheet,
+  GitBranch,
   GitFork,
   Home,
   Layers,
   LayoutDashboard,
+  LogIn,
+  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Tags,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
+import { authClient } from "@/lib/auth-client";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -36,6 +41,8 @@ const SECTIONS: { key: SectionKey; label: string; items: NavItem[] }[] = [
       { href: "/pools", label: "Pool Setup", icon: Layers },
       { href: "/cost-structure", label: "Cost Structure", icon: GitFork },
       { href: "/mappings", label: "Mappings", icon: Tags },
+      { href: "/scenarios", label: "Scenarios", icon: GitBranch },
+      { href: "/data", label: "Data Files", icon: Database },
     ],
   },
   {
@@ -45,6 +52,7 @@ const SECTIONS: { key: SectionKey; label: string; items: NavItem[] }[] = [
       { href: "/forecast", label: "Forecast", icon: LayoutDashboard },
       { href: "/rates", label: "Rates", icon: Calculator },
       { href: "/psr", label: "PSR", icon: BarChart3 },
+      { href: "/pst", label: "PST", icon: FileSpreadsheet },
     ],
   },
 ];
@@ -136,6 +144,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [sectionState, setSectionState] = useState<Record<SectionKey, boolean>>({ settings: true, reports: true });
   const [mounted, setMounted] = useState(false);
+  const { data: session } = authClient.useSession();
 
   useEffect(() => {
     setSectionState(loadSectionState());
@@ -185,13 +194,36 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <span className="text-sm font-bold tracking-tight">IndirectRates</span>
           </Link>
           <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">v0.2</span>
+            <span className="text-xs text-muted-foreground">v0.3</span>
             <ThemeToggle />
+            {session?.user ? (
+              <>
+                <span className="text-xs text-muted-foreground hidden sm:block truncate max-w-32">
+                  {session.user.email}
+                </span>
+                <button
+                  onClick={() => authClient.signOut()}
+                  title="Sign out"
+                  className="p-1.5 rounded-md hover:bg-accent transition-colors bg-transparent! border-none!"
+                >
+                  <LogOut className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/auth/signin"
+                title="Sign in"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors no-underline"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Sign In
+              </Link>
+            )}
           </div>
         </div>
       </header>
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside
           className={`shrink-0 border-r border-border bg-sidebar text-sidebar-foreground flex flex-col overflow-y-auto transition-[width] duration-200 ${

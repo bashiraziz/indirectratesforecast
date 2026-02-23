@@ -89,7 +89,7 @@ def test_sub_pool_rates_sum_correctly():
         forecast_months=3, run_rate_months=3,
     )
 
-    rates, impacts = compute_rates_and_impacts(projection, config)
+    rates, impacts, _ = compute_rates_and_impacts(projection, config)
 
     # Verify Fringe rate = (Fringe1 + Fringe2) / TL
     for period in rates.index[:3]:
@@ -120,7 +120,7 @@ def test_sub_pool_impacts_have_dynamic_columns():
         actual_pools, actual_bases, direct_by_project,
         forecast_months=3, run_rate_months=3,
     )
-    rates, impacts = compute_rates_and_impacts(projection, config)
+    rates, impacts, _ = compute_rates_and_impacts(projection, config)
 
     assert "Fringe$" in impacts.columns
     assert "Overhead$" in impacts.columns

@@ -21,24 +21,40 @@ def compute_ytd_rates(
     rate_definitions: dict[str, dict[str, Any]],
     fy_start: pd.Period,
 ) -> pd.DataFrame:
-    """Compute cumulative YTD rates from fiscal year start through each period.
+    """Compute cumulative YTD rates for every fiscal year in the data.
+
+    The FY start month is derived from ``fy_start``.  For each period the
+    cumulative window resets at the beginning of its fiscal year and runs
+    through the current period.
 
     Args:
         pools: Period x PoolName with pool dollar amounts
         bases: Period x BaseKey with base dollar amounts
         rate_definitions: {rate_name: {"pool": [pool_names], "base": base_key}}
-        fy_start: Fiscal year start period
+        fy_start: Fiscal year start period (used to determine FY start month)
 
     Returns:
-        DataFrame with columns: Period, rate_name_ytd for each rate
+        Period-indexed DataFrame with one column per rate name
     """
-    fy_periods = pools.index[pools.index >= fy_start].sort_values()
-    if len(fy_periods) == 0:
+    all_periods = pools.index.sort_values()
+    if len(all_periods) == 0:
         return pd.DataFrame()
 
+    fy_start_month = fy_start.month
+
     records: list[dict[str, Any]] = []
-    for i, period in enumerate(fy_periods):
-        window = fy_periods[: i + 1]
+    for period in all_periods:
+        # Determine the fiscal year start for this period
+        if period.month >= fy_start_month:
+            fy_begin = pd.Period(year=period.year, month=fy_start_month, freq="M")
+        else:
+            fy_begin = pd.Period(year=period.year - 1, month=fy_start_month, freq="M")
+
+        # Cumulative window: from fy_begin through current period
+        window = all_periods[(all_periods >= fy_begin) & (all_periods <= period)]
+        if len(window) == 0:
+            continue
+
         row: dict[str, Any] = {"Period": period}
         for rate_name, rate_def in rate_definitions.items():
             pool_names = rate_def["pool"]
