@@ -25,3 +25,7 @@ enhancements
 .claude/
 .env.local
 .env*.local
+.env
+
+
+.vercel

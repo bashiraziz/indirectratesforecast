@@ -40,7 +40,7 @@ from .db import (
 
 def _rate_key(request: Request) -> str:
     user_id = request.headers.get("X-User-ID")
-    return user_id if user_id else get_remote_address(request)
+    return f"user:{user_id}" if user_id else f"ip:{get_remote_address(request)}"
 
 
 limiter = Limiter(key_func=_rate_key)
@@ -78,6 +78,11 @@ app.add_middleware(
 app.include_router(crud_router)
 
 
+@app.get("/")
+def root():
+    return {"ok": True}
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
@@ -95,13 +100,12 @@ def _auth_limit() -> str:
     return "20/minute"
 
 
-def _get_limit(request: Request) -> str:
-    user_id = request.headers.get("X-User-ID")
-    return _auth_limit() if user_id else _guest_limit()
+def _get_limit(key: str) -> str:
+    return _auth_limit() if key.startswith("user:") else _guest_limit()
 
 
 @app.post("/forecast")
-@limiter.limit(lambda request: _get_limit(request))
+@limiter.limit(_get_limit)
 async def forecast(
     request: Request,
     scenario: Optional[str] = Form(default=None),

@@ -9,7 +9,6 @@ from __future__ import annotations
 import csv
 import json
 import random
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -585,7 +584,7 @@ def _generate_revenue_data(direct_rows: list[dict], rng: random.Random) -> list[
 
 
 def _generate_scenarios_for_fy(
-    conn: sqlite3.Connection, fy_id: int, fy_name: str, fy_def: dict
+    conn, fy_id: int, fy_name: str, fy_def: dict
 ) -> int:
     """Create 8 scenarios with events for a single FY."""
     periods = _periods_for_fy(fy_def)
@@ -791,7 +790,7 @@ def _write_scenario_events(data_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def seed_demo_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, Any]:
+def seed_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
     """Seed the database with realistic enterprise demo data and write CSV files.
 
     Creates 4 fiscal years (DEMO-FY2023 through DEMO-FY2026) with full pool
@@ -802,9 +801,12 @@ def seed_demo_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, 
     rng = random.Random(42)
 
     # Check if already seeded
-    existing = conn.execute(
-        "SELECT id FROM fiscal_years WHERE name LIKE ?", (f"{DEMO_FY_PREFIX}%",)
-    ).fetchone()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM fiscal_years WHERE name LIKE %s",
+            (f"{DEMO_FY_PREFIX}%",),
+        )
+        existing = cur.fetchone()
     if existing:
         return {"error": f"Demo data already exists (found {DEMO_FY_PREFIX}* fiscal years). Clear first."}
 
@@ -883,13 +885,16 @@ def seed_demo_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, 
     }
 
 
-def clear_demo_data(conn: sqlite3.Connection, data_dir: Path | str) -> dict[str, Any]:
+def clear_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
     """Remove all DEMO-* fiscal years (CASCADE deletes children) and CSV files."""
     data_dir = Path(data_dir)
 
-    rows = conn.execute(
-        "SELECT id, name FROM fiscal_years WHERE name LIKE ?", (f"{DEMO_FY_PREFIX}%",)
-    ).fetchall()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, name FROM fiscal_years WHERE name LIKE %s",
+            (f"{DEMO_FY_PREFIX}%",),
+        )
+        rows = cur.fetchall()
 
     deleted_count = 0
     for row in rows:
