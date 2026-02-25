@@ -1,9 +1,9 @@
 {
   "$schema": "https://railway.app/railway-schema.json",
   "build": {
-    "installCommand": "pip install -e '.[server,ai]'"
+    "buildCommand": "pip install -e '.[server,ai]'"
   },
   "deploy": {
-    "startCommand": "uvicorn indirectrates.server:app --host 0.0.0.0 --port $PORT"
+    "startCommand": "python -m uvicorn indirectrates.server:app --host 0.0.0.0 --port $PORT"
   }
 }
