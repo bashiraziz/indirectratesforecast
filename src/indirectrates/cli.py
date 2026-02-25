@@ -9,7 +9,7 @@ from rich.console import Console
 from .agents import AnalystAgent, PlannerAgent, ReporterAgent
 from .config import RateConfig, default_rate_config
 from . import db
-from .db import DEFAULT_DB_PATH, init_db
+from .db import init_db
 from .synth import SynthSpec, generate_synthetic_dataset
 
 app = typer.Typer(add_completion=False, help="Indirect rate forecasting agent (GovCon MVP).")
@@ -45,12 +45,10 @@ def run(
 
 
 @app.command(name="init-db")
-def init_db_cmd(
-    db: Path = typer.Option(str(DEFAULT_DB_PATH), help="Path to the SQLite database file."),
-):
-    """Initialize the SQLite database (creates tables if they don't exist)."""
-    path = init_db(db)
-    console.print(f"Database initialized at {path}")
+def init_db_cmd():
+    """Initialize the PostgreSQL database (creates tables if they don't exist)."""
+    init_db()
+    console.print("Database initialized.")
 
 
 @app.command()
@@ -61,7 +59,7 @@ def demo(
     """Generate realistic enterprise demo dataset (4 FYs, 30 projects, ~60 accounts)."""
     from .demo_data import seed_demo_data as _seed
 
-    conn = db.get_connection(DEFAULT_DB_PATH)
+    conn = db.get_connection()
     try:
         result = _seed(conn, out)
         if "error" in result:
