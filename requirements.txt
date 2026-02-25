@@ -17,5 +17,5 @@ slowapi>=0.1.9
 # AI
 google-generativeai>=0.8
 
-# Install the local package (src/indirectrates/)
-.
+# Do not install the local package here.
+# Railpack installs requirements before copying full source, so '.' fails in CI.

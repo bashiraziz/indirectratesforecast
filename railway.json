@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.app/railway-schema.json",
   "deploy": {
-    "startCommand": "python -m uvicorn indirectrates.server:app --host 0.0.0.0 --port $PORT"
+    "startCommand": "PYTHONPATH=src python -m uvicorn indirectrates.server:app --host 0.0.0.0 --port $PORT"
   }
 }
