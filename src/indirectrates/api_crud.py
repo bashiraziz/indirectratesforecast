@@ -403,6 +403,8 @@ def create_fiscal_year(body: FiscalYearCreate, request: Request):
     conn = _conn()
     try:
         fy_id = db.create_fiscal_year(conn, body.name, body.start_month, body.end_month, user_id=user_id)
+        db.seed_default_cost_categories(conn, fy_id)
+        db.seed_default_pool_structure(conn, fy_id)
         return {"id": fy_id, **body.model_dump()}
     finally:
         conn.close()

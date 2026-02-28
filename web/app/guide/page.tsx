@@ -16,33 +16,48 @@ const REGISTERED_STEPS: RegisteredStep[] = [
   {
     label: "Create a Fiscal Year",
     href: "/fiscal-years",
-    sub: [{ label: "Set name, start month, and end month for your contract period." }],
+    sub: [
+      { label: "Set name, start month, and end month for your contract period." },
+      {
+        label: "Five standard cost categories are seeded automatically — see Cost Categories below.",
+        note: "Labor, ODC, Subcontractor, Travel, Other Direct",
+      },
+    ],
   },
   {
     label: "Upload GL Actuals — pick one option:",
     sub: [
       {
-        label: "Option A: GL Ledger page — add/edit individual entries, import CSV, or export",
+        label: "Option A: GL Ledger — add/edit individual entries, import CSV, or export",
         href: "/gl-ledger",
         note: "Recommended: entries stored in DB, editable anytime",
       },
       {
-        label: "Option B: Data Files page — upload a GL_Actuals.csv blob",
+        label: "Option B: Data Files — upload a GL_Actuals.csv blob",
         href: "/data",
         note: "Simpler; file replaced on each upload",
       },
     ],
   },
   {
-    label: "Upload Direct Costs by Project",
-    href: "/data",
-    sub: [{ label: "Upload Direct_Costs_By_Project.csv via Data Files." }],
+    label: "Upload Direct Costs by Project — pick one option:",
+    sub: [
+      {
+        label: "Option A: Direct Costs — add/edit individual rows, import CSV, or export",
+        href: "/direct-costs",
+        note: "Recommended: entries stored in DB, editable anytime",
+      },
+      {
+        label: "Option B: Data Files — upload Direct_Costs_By_Project.csv blob",
+        href: "/data",
+      },
+    ],
   },
   {
     label: "Configure Account Map — pick one option:",
     sub: [
       {
-        label: "Option A: Pools + Mappings pages — build pool groups, pools, and GL mappings in the UI",
+        label: "Option A: Pools + Mappings — build pool groups, pools, and GL mappings in the UI",
         href: "/pools",
         note: "Persistent DB config; recommended for recurring forecasts",
       },
@@ -78,6 +93,54 @@ const DIFFERENCES = [
   { capability: "Quota tracking", guest: "No", registered: "Yes" },
 ];
 
+const COST_CATEGORIES = [
+  {
+    type: "Labor",
+    name: "Direct Labor",
+    isDirect: true,
+    color: "bg-blue-500/10 text-blue-400",
+    description:
+      "Salaries and wages charged directly to contracts. Drives the Fringe and Overhead allocation bases. Captured as DirectLabor$ and DirectLaborHrs in the Direct Costs file.",
+    rateImpact: "Fringe base · Overhead base",
+  },
+  {
+    type: "ODC",
+    name: "Other Direct Costs",
+    isDirect: true,
+    color: "bg-green-500/10 text-green-400",
+    description:
+      "Materials, equipment, supplies, and any other cost charged directly to a contract that is not labor, subcontract, or travel. Flows into Total Cost Input (TCI), the G&A allocation base.",
+    rateImpact: "G&A base (TCI)",
+  },
+  {
+    type: "Subcontractor",
+    name: "Subcontractor",
+    isDirect: true,
+    color: "bg-orange-500/10 text-orange-400",
+    description:
+      "Costs paid to subcontractors or subrecipients performing work under the prime contract. Per FAR, subcontract costs are often excluded from the Overhead base but included in TCI for G&A.",
+    rateImpact: "G&A base (TCI) · excluded from Overhead base",
+  },
+  {
+    type: "Travel",
+    name: "Travel",
+    isDirect: true,
+    color: "bg-purple-500/10 text-purple-400",
+    description:
+      "Airfare, lodging, per diem, and other travel costs billed directly to a contract. Included in TCI. DCAA requires travel costs to be separately identified and supported.",
+    rateImpact: "G&A base (TCI)",
+  },
+  {
+    type: "Other Direct",
+    name: "Other Direct Costs",
+    isDirect: true,
+    color: "bg-gray-500/10 text-gray-400",
+    description:
+      "Catch-all for any direct cost not fitting the four categories above — e.g., consultant fees, training, or other contract-specific items. Also flows into TCI.",
+    rateImpact: "G&A base (TCI)",
+  },
+];
+
 export default function GuidePage() {
   return (
     <main className="container" style={{ maxWidth: 980 }}>
@@ -86,6 +149,7 @@ export default function GuidePage() {
         Quick walkthroughs for guest evaluation and full registered workflows.
       </p>
 
+      {/* Guest path */}
       <section className="card" style={{ marginBottom: 12 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Guest Path (Try Demo)</h2>
         <ol style={{ marginTop: 0, marginBottom: 10, paddingLeft: 20 }}>
@@ -98,11 +162,12 @@ export default function GuidePage() {
         </Link>
       </section>
 
+      {/* Registered path */}
       <section className="card" style={{ marginBottom: 12 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Registered Path</h2>
         <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-          <strong>Data source priority:</strong> If GL Ledger entries exist for the fiscal year, they are used as the GL
-          actuals source. Otherwise the system falls back to the uploaded GL_Actuals.csv file.
+          <strong>Data source priority:</strong> If GL Ledger or Direct Cost entries exist in the DB for
+          the fiscal year, they are used first. Otherwise the system falls back to uploaded CSV file blobs.
         </p>
         <ol style={{ marginTop: 0, marginBottom: 10, paddingLeft: 20 }}>
           {REGISTERED_STEPS.map((step, i) => (
@@ -118,11 +183,7 @@ export default function GuidePage() {
                 <ul style={{ marginTop: 4, paddingLeft: 18, listStyleType: "disc" }}>
                   {step.sub.map((sub, j) => (
                     <li key={j} style={{ marginBottom: 4, fontSize: 13 }}>
-                      {sub.href ? (
-                        <Link href={sub.href}>{sub.label}</Link>
-                      ) : (
-                        sub.label
-                      )}
+                      {sub.href ? <Link href={sub.href}>{sub.label}</Link> : sub.label}
                       {sub.note && (
                         <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
                           — {sub.note}
@@ -145,6 +206,109 @@ export default function GuidePage() {
         </div>
       </section>
 
+      {/* Cost Categories */}
+      <section className="card" style={{ marginBottom: 12 }}>
+        <h2 style={{ marginTop: 0, fontSize: 16 }}>Cost Categories</h2>
+        <p className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+          Cost categories classify where every dollar goes — the bridge between raw GL account numbers
+          and the economic meaning of each cost. DCAA requires this classification to determine what is
+          direct vs. indirect and what feeds into each rate pool base.
+        </p>
+        <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>
+          <strong>These five categories are seeded automatically</strong> on every new fiscal year.
+          You can add GL accounts to each via the{" "}
+          <Link href="/cost-structure">Cost Structure</Link> page, and view the cascade formulas that
+          show how each category flows into the rate calculation.
+        </p>
+
+        {/* Category cards */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {COST_CATEGORIES.map((cat) => (
+            <div
+              key={cat.type}
+              style={{
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                padding: "12px 14px",
+                display: "grid",
+                gridTemplateColumns: "160px 1fr auto",
+                gap: 12,
+                alignItems: "start",
+              }}
+            >
+              <div>
+                <span
+                  className={cat.color}
+                  style={{
+                    display: "inline-block",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    marginBottom: 4,
+                  }}
+                >
+                  {cat.type}
+                </span>
+                <div style={{ fontSize: 12, fontWeight: 500 }}>{cat.name}</div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Direct cost</div>
+              </div>
+              <p className="muted" style={{ fontSize: 12, margin: 0, lineHeight: 1.6 }}>
+                {cat.description}
+              </p>
+              <div
+                style={{
+                  fontSize: 11,
+                  whiteSpace: "nowrap",
+                  color: "var(--color-muted-foreground)",
+                  textAlign: "right",
+                  minWidth: 160,
+                }}
+              >
+                {cat.rateImpact}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Cascade formula */}
+        <div
+          style={{
+            marginTop: 16,
+            padding: "12px 14px",
+            background: "var(--color-accent)",
+            borderRadius: 8,
+            fontSize: 12,
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Rate Cascade (DCAA-Correct Order)</div>
+          <div style={{ fontFamily: "monospace", lineHeight: 2 }}>
+            <div>
+              <strong>Fringe Rate</strong> = Fringe Pool $ /{" "}
+              <span style={{ color: "var(--color-primary)" }}>Direct Labor $</span>
+            </div>
+            <div>
+              <strong>Overhead Rate</strong> = Overhead Pool $ /{" "}
+              <span style={{ color: "var(--color-primary)" }}>
+                Direct Labor $ + Fringe on DL
+              </span>
+            </div>
+            <div>
+              <strong>G&A Rate</strong> = G&A Pool $ /{" "}
+              <span style={{ color: "var(--color-primary)" }}>
+                Total Cost Input (DL + Subk + ODC + Travel + Overhead)
+              </span>
+            </div>
+          </div>
+          <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+            Each tier is applied in cascade order — earlier tiers are included in later tier bases.
+            View and configure this in{" "}
+            <Link href="/cost-structure">Cost Structure</Link>.
+          </p>
+        </div>
+      </section>
+
+      {/* Guest vs Registered */}
       <section className="card" style={{ marginBottom: 12 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Guest vs Registered</h2>
         <div style={{ overflowX: "auto" }}>
@@ -183,4 +347,3 @@ export default function GuidePage() {
     </main>
   );
 }
-

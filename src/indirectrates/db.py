@@ -796,6 +796,87 @@ def delete_cost_category(conn: psycopg2.extensions.connection, cc_id: int) -> bo
             return cur.rowcount > 0
 
 
+# Five standard GovCon direct cost categories seeded on every new fiscal year.
+# Each tuple: (category_type, category_name, description_notes, is_direct)
+_DEFAULT_COST_CATEGORIES: list[tuple[str, str, bool]] = [
+    ("Labor",          "Direct Labor",          True),
+    ("ODC",            "Other Direct Costs",     True),
+    ("Subcontractor",  "Subcontractor",          True),
+    ("Travel",         "Travel",                 True),
+    ("Other Direct",   "Other Direct Costs",     True),
+]
+
+
+def seed_default_cost_categories(conn: psycopg2.extensions.connection, fiscal_year_id: int) -> int:
+    """Insert the five standard direct cost categories if none exist yet. Returns rows inserted."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM cost_category_mappings WHERE fiscal_year_id = %s",
+            (fiscal_year_id,),
+        )
+        if (cur.fetchone() or {}).get("c", 0) > 0:
+            return 0  # already seeded
+
+    count = 0
+    with transaction(conn):
+        with conn.cursor() as cur:
+            for category_type, category_name, is_direct in _DEFAULT_COST_CATEGORIES:
+                cur.execute(
+                    """
+                    INSERT INTO cost_category_mappings
+                        (fiscal_year_id, category_type, category_name, is_direct)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (fiscal_year_id, category_type, category_name) DO NOTHING
+                    """,
+                    (fiscal_year_id, category_type, category_name, is_direct),
+                )
+                count += cur.rowcount
+    return count
+
+
+# (pool_group_name, base_key, cascade_order, default_pool_name)
+_DEFAULT_POOL_STRUCTURE: list[tuple[str, str, int, str]] = [
+    ("Fringe",   "TL",  0, "Fringe Benefits"),
+    ("Overhead", "DL",  1, "Overhead"),
+    ("G&A",      "TCI", 2, "G&A"),
+]
+
+
+def seed_default_pool_structure(conn: psycopg2.extensions.connection, fiscal_year_id: int) -> int:
+    """Seed Fringe/Overhead/G&A pool groups (with one pool each) if none exist. Returns pool groups inserted."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM pool_groups WHERE fiscal_year_id = %s",
+            (fiscal_year_id,),
+        )
+        if (cur.fetchone() or {}).get("c", 0) > 0:
+            return 0  # already configured
+
+    with transaction(conn):
+        with conn.cursor() as cur:
+            # Create the top-level rate group
+            cur.execute(
+                "INSERT INTO rate_groups (fiscal_year_id, name, display_order) VALUES (%s, %s, %s) RETURNING id",
+                (fiscal_year_id, "Indirect Rates", 0),
+            )
+            rg_id = cur.fetchone()["id"]
+
+            for i, (pg_name, base, cascade_order, pool_name) in enumerate(_DEFAULT_POOL_STRUCTURE):
+                cur.execute(
+                    """INSERT INTO pool_groups
+                           (fiscal_year_id, rate_group_id, name, base, cascade_order, display_order)
+                       VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (fiscal_year_id, rg_id, pg_name, base, cascade_order, i),
+                )
+                pg_id = cur.fetchone()["id"]
+                cur.execute(
+                    "INSERT INTO pools (pool_group_id, name, display_order) VALUES (%s, %s, %s)",
+                    (pg_id, pool_name, 0),
+                )
+
+    return len(_DEFAULT_POOL_STRUCTURE)
+
+
 # ---------------------------------------------------------------------------
 # Chart of Accounts CRUD
 # ---------------------------------------------------------------------------
