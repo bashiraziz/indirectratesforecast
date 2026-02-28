@@ -54,6 +54,25 @@ app = FastAPI(title="Indirect Rates Forecast API", version="0.3.0")
 app.state.limiter = limiter
 
 
+def _custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "BearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "API key (set API_KEY env var)"}
+    }
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if isinstance(operation, dict):
+                operation["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi
+
+
 def _request_id_from_request(request: Request) -> str:
     return getattr(request.state, "request_id", "") or request.headers.get("X-Request-ID", "")
 

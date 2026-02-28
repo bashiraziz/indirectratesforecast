@@ -7,6 +7,7 @@ from typing import Any
 
 import csv
 import io
+import os
 import re
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -30,8 +31,17 @@ def _404(item: str):
 
 
 def get_current_user(request: Request) -> str | None:
-    """Extract user ID from X-User-ID header (set by Next.js middleware)."""
-    return request.headers.get("X-User-ID") or None
+    """Extract user ID from X-User-ID header (Next.js middleware) or Bearer API key (Swagger/direct)."""
+    uid = request.headers.get("X-User-ID")
+    if uid:
+        return uid
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
+        api_key = os.environ.get("API_KEY", "")
+        if api_key and token == api_key:
+            return os.environ.get("API_KEY_USER_ID", "dev-user")
+    return None
 
 
 def require_auth(request: Request) -> str:
