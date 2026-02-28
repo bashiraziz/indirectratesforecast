@@ -291,7 +291,8 @@ async def forecast(
         finally:
             conn.close()
         if account_map_df.empty:
-            raise HTTPException(status_code=400, detail="No GL account mappings configured for this fiscal year")
+            # No DB mappings — fall through to uploaded blob / disk fallback below
+            account_map_df = None
     else:
         cfg = await _load_config(config_yaml)
         account_map_df = None
@@ -339,11 +340,22 @@ async def forecast(
                 import shutil
                 shutil.copy2(disk_dir / "GL_Actuals.csv", input_dir / "GL_Actuals.csv")
 
-            # Account_Map: DB-generated > uploaded > disk
+            # Account_Map: DB-generated > fresh upload > uploaded blob > disk
             if account_map_df is not None:
                 account_map_df.to_csv(input_dir / "Account_Map.csv", index=False)
             elif account_map is not None:
                 await _write_upload(account_map, input_dir / "Account_Map.csv")
+            elif fiscal_year_id is not None:
+                conn = get_connection()
+                try:
+                    uf = get_latest_uploaded_file(conn, fiscal_year_id, "account_map")
+                finally:
+                    conn.close()
+                if uf:
+                    (input_dir / "Account_Map.csv").write_bytes(uf["content"])
+                elif disk_dir and (disk_dir / "Account_Map.csv").exists():
+                    import shutil
+                    shutil.copy2(disk_dir / "Account_Map.csv", input_dir / "Account_Map.csv")
             elif disk_dir and (disk_dir / "Account_Map.csv").exists():
                 import shutil
                 shutil.copy2(disk_dir / "Account_Map.csv", input_dir / "Account_Map.csv")
