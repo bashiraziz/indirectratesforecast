@@ -293,20 +293,29 @@ async def forecast(
             except zipfile.BadZipFile as exc:
                 raise HTTPException(status_code=400, detail="inputs_zip is not a valid ZIP archive") from exc
         else:
-            # GL_Actuals: DB upload > fresh upload > disk
+            # GL_Actuals: fresh upload > gl_entries > uploaded_files > disk
             if gl_actuals is not None:
                 await _write_upload(gl_actuals, input_dir / "GL_Actuals.csv")
             elif fiscal_year_id is not None:
+                from . import db as _db
                 conn = get_connection()
                 try:
-                    uf = get_latest_uploaded_file(conn, fiscal_year_id, "gl_actuals")
+                    csv_str = _db.get_gl_entries_as_csv(conn, user_id or "", fiscal_year_id)
                 finally:
                     conn.close()
-                if uf:
-                    (input_dir / "GL_Actuals.csv").write_bytes(uf["content"])
-                elif disk_dir and (disk_dir / "GL_Actuals.csv").exists():
-                    import shutil
-                    shutil.copy2(disk_dir / "GL_Actuals.csv", input_dir / "GL_Actuals.csv")
+                if csv_str.strip():
+                    (input_dir / "GL_Actuals.csv").write_text(csv_str, encoding="utf-8")
+                else:
+                    conn = get_connection()
+                    try:
+                        uf = get_latest_uploaded_file(conn, fiscal_year_id, "gl_actuals")
+                    finally:
+                        conn.close()
+                    if uf:
+                        (input_dir / "GL_Actuals.csv").write_bytes(uf["content"])
+                    elif disk_dir and (disk_dir / "GL_Actuals.csv").exists():
+                        import shutil
+                        shutil.copy2(disk_dir / "GL_Actuals.csv", input_dir / "GL_Actuals.csv")
             elif disk_dir and (disk_dir / "GL_Actuals.csv").exists():
                 import shutil
                 shutil.copy2(disk_dir / "GL_Actuals.csv", input_dir / "GL_Actuals.csv")
@@ -320,20 +329,28 @@ async def forecast(
                 import shutil
                 shutil.copy2(disk_dir / "Account_Map.csv", input_dir / "Account_Map.csv")
 
-            # Direct_Costs: DB upload > fresh upload > disk
+            # Direct_Costs: fresh upload > direct_cost_entries > uploaded_files > disk
             if direct_costs is not None:
                 await _write_upload(direct_costs, input_dir / "Direct_Costs_By_Project.csv")
             elif fiscal_year_id is not None:
                 conn = get_connection()
                 try:
-                    uf = get_latest_uploaded_file(conn, fiscal_year_id, "direct_costs")
+                    dc_csv = _db.get_direct_cost_entries_as_csv(conn, user_id or "", fiscal_year_id)
                 finally:
                     conn.close()
-                if uf:
-                    (input_dir / "Direct_Costs_By_Project.csv").write_bytes(uf["content"])
-                elif disk_dir and (disk_dir / "Direct_Costs_By_Project.csv").exists():
-                    import shutil
-                    shutil.copy2(disk_dir / "Direct_Costs_By_Project.csv", input_dir / "Direct_Costs_By_Project.csv")
+                if dc_csv.strip():
+                    (input_dir / "Direct_Costs_By_Project.csv").write_text(dc_csv, encoding="utf-8")
+                else:
+                    conn = get_connection()
+                    try:
+                        uf = get_latest_uploaded_file(conn, fiscal_year_id, "direct_costs")
+                    finally:
+                        conn.close()
+                    if uf:
+                        (input_dir / "Direct_Costs_By_Project.csv").write_bytes(uf["content"])
+                    elif disk_dir and (disk_dir / "Direct_Costs_By_Project.csv").exists():
+                        import shutil
+                        shutil.copy2(disk_dir / "Direct_Costs_By_Project.csv", input_dir / "Direct_Costs_By_Project.csv")
             elif disk_dir and (disk_dir / "Direct_Costs_By_Project.csv").exists():
                 import shutil
                 shutil.copy2(disk_dir / "Direct_Costs_By_Project.csv", input_dir / "Direct_Costs_By_Project.csv")

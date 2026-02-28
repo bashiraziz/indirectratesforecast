@@ -22,6 +22,8 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Receipt,
+  TableProperties,
   Tags,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
@@ -50,6 +52,10 @@ const SECTIONS: { key: SectionKey; label: string; items: NavItem[] }[] = [
     key: "reports",
     label: "Reports",
     items: [
+      { href: "/gl-ledger", label: "GL Ledger", icon: TableProperties },
+      { href: "/direct-costs", label: "Direct Costs", icon: Receipt },
+      { href: "/mappings", label: "Account Map", icon: Tags },
+      { href: "/chart-of-accounts", label: "COA", icon: BookOpen },
       { href: "/forecast", label: "Forecast", icon: LayoutDashboard },
       { href: "/rates", label: "Rates", icon: Calculator },
       { href: "/psr", label: "PSR", icon: BarChart3 },

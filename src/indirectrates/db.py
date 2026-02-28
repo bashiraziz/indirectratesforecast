@@ -228,6 +228,33 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
     size_bytes     INTEGER NOT NULL DEFAULT 0,
     uploaded_at    TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS gl_entries (
+    id             SERIAL PRIMARY KEY,
+    user_id        TEXT    NOT NULL DEFAULT '',
+    fiscal_year_id INTEGER NOT NULL REFERENCES fiscal_years(id) ON DELETE CASCADE,
+    period         TEXT    NOT NULL,
+    account        TEXT    NOT NULL,
+    amount         NUMERIC(15,2) NOT NULL DEFAULT 0,
+    entity         TEXT    NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS gl_entries_user_fy ON gl_entries(user_id, fiscal_year_id);
+
+CREATE TABLE IF NOT EXISTS direct_cost_entries (
+    id               SERIAL PRIMARY KEY,
+    user_id          TEXT    NOT NULL DEFAULT '',
+    fiscal_year_id   INTEGER NOT NULL REFERENCES fiscal_years(id) ON DELETE CASCADE,
+    period           TEXT    NOT NULL,
+    project          TEXT    NOT NULL DEFAULT '',
+    direct_labor     NUMERIC(15,2) NOT NULL DEFAULT 0,
+    direct_labor_hrs NUMERIC(15,4) NOT NULL DEFAULT 0,
+    subk             NUMERIC(15,2) NOT NULL DEFAULT 0,
+    odc              NUMERIC(15,2) NOT NULL DEFAULT 0,
+    travel           NUMERIC(15,2) NOT NULL DEFAULT 0,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS direct_cost_entries_user_fy ON direct_cost_entries(user_id, fiscal_year_id);
 """
 
 
@@ -271,7 +298,21 @@ def get_user_storage_bytes(conn: psycopg2.extensions.connection, user_id: str) -
         )
         file_bytes = (cur.fetchone() or {}).get("total") or 0
 
-    return int(run_bytes) + int(file_bytes)
+        cur.execute(
+            "SELECT COALESCE(SUM(octet_length(period)+octet_length(account)+octet_length(entity)+8),0) AS total"
+            " FROM gl_entries WHERE user_id = %s",
+            (user_id,),
+        )
+        gl_bytes = (cur.fetchone() or {}).get("total") or 0
+
+        cur.execute(
+            "SELECT COALESCE(SUM(octet_length(period)+octet_length(project)+8),0) AS total"
+            " FROM direct_cost_entries WHERE user_id = %s",
+            (user_id,),
+        )
+        dc_bytes = (cur.fetchone() or {}).get("total") or 0
+
+    return int(run_bytes) + int(file_bytes) + int(gl_bytes) + int(dc_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -1526,3 +1567,325 @@ def get_latest_uploaded_file(
     if d.get("content") and isinstance(d["content"], memoryview):
         d["content"] = bytes(d["content"])
     return d
+
+
+# ---------------------------------------------------------------------------
+# GL Entries CRUD
+# ---------------------------------------------------------------------------
+
+def count_gl_entries(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    period: str | None = None,
+    account: str | None = None,
+) -> int:
+    filters = ["user_id = %s", "fiscal_year_id = %s"]
+    params: list[Any] = [user_id, fy_id]
+    if period:
+        filters.append("period = %s")
+        params.append(period)
+    if account:
+        filters.append("account ILIKE %s")
+        params.append(f"%{account}%")
+    where = " AND ".join(filters)
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) AS c FROM gl_entries WHERE {where}", params)
+        return int((cur.fetchone() or {}).get("c") or 0)
+
+
+def list_gl_entries(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    period: str | None = None,
+    account: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    filters = ["user_id = %s", "fiscal_year_id = %s"]
+    params: list[Any] = [user_id, fy_id]
+    if period:
+        filters.append("period = %s")
+        params.append(period)
+    if account:
+        filters.append("account ILIKE %s")
+        params.append(f"%{account}%")
+    where = " AND ".join(filters)
+    params += [limit, offset]
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, period, account, amount, entity, created_at FROM gl_entries WHERE {where} ORDER BY period, account LIMIT %s OFFSET %s",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def create_gl_entry(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    period: str,
+    account: str,
+    amount: float,
+    entity: str = "",
+) -> int:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO gl_entries (user_id, fiscal_year_id, period, account, amount, entity) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                (user_id, fy_id, period, account, amount, entity),
+            )
+            return cur.fetchone()["id"]
+
+
+def update_gl_entry(
+    conn: psycopg2.extensions.connection,
+    entry_id: int,
+    user_id: str,
+    period: str,
+    account: str,
+    amount: float,
+    entity: str = "",
+) -> bool:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE gl_entries SET period = %s, account = %s, amount = %s, entity = %s WHERE id = %s AND user_id = %s",
+                (period, account, amount, entity, entry_id, user_id),
+            )
+            return cur.rowcount > 0
+
+
+def delete_gl_entry(conn: psycopg2.extensions.connection, entry_id: int, user_id: str) -> bool:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM gl_entries WHERE id = %s AND user_id = %s", (entry_id, user_id))
+            return cur.rowcount > 0
+
+
+def bulk_insert_gl_entries(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    rows: list[dict[str, Any]],
+) -> int:
+    if not rows:
+        return 0
+    tuples = [
+        (user_id, fy_id, r["period"], r["account"], float(r["amount"]), r.get("entity", ""))
+        for r in rows
+    ]
+    with transaction(conn):
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_batch(
+                cur,
+                "INSERT INTO gl_entries (user_id, fiscal_year_id, period, account, amount, entity) VALUES (%s, %s, %s, %s, %s, %s)",
+                tuples,
+                page_size=500,
+            )
+            return len(tuples)
+
+
+def delete_gl_entries_for_fy(
+    conn: psycopg2.extensions.connection, user_id: str, fy_id: int
+) -> int:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM gl_entries WHERE user_id = %s AND fiscal_year_id = %s",
+                (user_id, fy_id),
+            )
+            return cur.rowcount
+
+
+def get_gl_entries_as_csv(
+    conn: psycopg2.extensions.connection, user_id: str, fy_id: int
+) -> str:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT period AS \"Period\", account AS \"Account\", amount AS \"Amount\", entity AS \"Entity\""
+            " FROM gl_entries WHERE user_id = %s AND fiscal_year_id = %s ORDER BY period, account",
+            (user_id, fy_id),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return ""
+    import io as _io
+    import csv as _csv
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["Period", "Account", "Amount", "Entity"])
+    for r in rows:
+        writer.writerow([r["Period"], r["Account"], r["Amount"], r["Entity"]])
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Direct Cost Entries CRUD
+# ---------------------------------------------------------------------------
+
+def count_direct_cost_entries(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    period: str | None = None,
+    project: str | None = None,
+) -> int:
+    filters = ["user_id = %s", "fiscal_year_id = %s"]
+    params: list[Any] = [user_id, fy_id]
+    if period:
+        filters.append("period = %s")
+        params.append(period)
+    if project:
+        filters.append("project ILIKE %s")
+        params.append(f"%{project}%")
+    where = " AND ".join(filters)
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) AS c FROM direct_cost_entries WHERE {where}", params)
+        return int((cur.fetchone() or {}).get("c") or 0)
+
+
+def list_direct_cost_entries(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    period: str | None = None,
+    project: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    filters = ["user_id = %s", "fiscal_year_id = %s"]
+    params: list[Any] = [user_id, fy_id]
+    if period:
+        filters.append("period = %s")
+        params.append(period)
+    if project:
+        filters.append("project ILIKE %s")
+        params.append(f"%{project}%")
+    where = " AND ".join(filters)
+    params += [limit, offset]
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, period, project, direct_labor, direct_labor_hrs, subk, odc, travel, created_at"
+            f" FROM direct_cost_entries WHERE {where} ORDER BY period, project LIMIT %s OFFSET %s",
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def create_direct_cost_entry(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    period: str,
+    project: str,
+    direct_labor: float = 0,
+    direct_labor_hrs: float = 0,
+    subk: float = 0,
+    odc: float = 0,
+    travel: float = 0,
+) -> int:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO direct_cost_entries (user_id, fiscal_year_id, period, project, direct_labor, direct_labor_hrs, subk, odc, travel)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (user_id, fy_id, period, project, direct_labor, direct_labor_hrs, subk, odc, travel),
+            )
+            return cur.fetchone()["id"]
+
+
+def update_direct_cost_entry(
+    conn: psycopg2.extensions.connection,
+    entry_id: int,
+    user_id: str,
+    period: str,
+    project: str,
+    direct_labor: float = 0,
+    direct_labor_hrs: float = 0,
+    subk: float = 0,
+    odc: float = 0,
+    travel: float = 0,
+) -> bool:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE direct_cost_entries SET period=%s, project=%s, direct_labor=%s, direct_labor_hrs=%s,"
+                " subk=%s, odc=%s, travel=%s WHERE id=%s AND user_id=%s",
+                (period, project, direct_labor, direct_labor_hrs, subk, odc, travel, entry_id, user_id),
+            )
+            return cur.rowcount > 0
+
+
+def delete_direct_cost_entry(conn: psycopg2.extensions.connection, entry_id: int, user_id: str) -> bool:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM direct_cost_entries WHERE id = %s AND user_id = %s", (entry_id, user_id))
+            return cur.rowcount > 0
+
+
+def bulk_insert_direct_cost_entries(
+    conn: psycopg2.extensions.connection,
+    user_id: str,
+    fy_id: int,
+    rows: list[dict[str, Any]],
+) -> int:
+    if not rows:
+        return 0
+    tuples = [
+        (
+            user_id, fy_id,
+            r["period"], r.get("project", ""),
+            float(r.get("direct_labor", 0)),
+            float(r.get("direct_labor_hrs", 0)),
+            float(r.get("subk", 0)),
+            float(r.get("odc", 0)),
+            float(r.get("travel", 0)),
+        )
+        for r in rows
+    ]
+    with transaction(conn):
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_batch(
+                cur,
+                "INSERT INTO direct_cost_entries (user_id, fiscal_year_id, period, project, direct_labor, direct_labor_hrs, subk, odc, travel)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                tuples,
+                page_size=500,
+            )
+            return len(tuples)
+
+
+def delete_direct_cost_entries_for_fy(
+    conn: psycopg2.extensions.connection, user_id: str, fy_id: int
+) -> int:
+    with transaction(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM direct_cost_entries WHERE user_id = %s AND fiscal_year_id = %s",
+                (user_id, fy_id),
+            )
+            return cur.rowcount
+
+
+def get_direct_cost_entries_as_csv(
+    conn: psycopg2.extensions.connection, user_id: str, fy_id: int
+) -> str:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT period, project, direct_labor, direct_labor_hrs, subk, odc, travel"
+            " FROM direct_cost_entries WHERE user_id = %s AND fiscal_year_id = %s ORDER BY period, project",
+            (user_id, fy_id),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return ""
+    import io as _io
+    import csv as _csv
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["Period", "Project", "DirectLabor$", "DirectLaborHrs", "Subk", "ODC", "Travel"])
+    for r in rows:
+        writer.writerow([r["period"], r["project"], r["direct_labor"], r["direct_labor_hrs"], r["subk"], r["odc"], r["travel"]])
+    return buf.getvalue()

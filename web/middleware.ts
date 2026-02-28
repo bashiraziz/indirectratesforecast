@@ -9,6 +9,8 @@ const PROTECTED_PATHS = [
   "/mappings",
   "/scenarios",
   "/data",
+  "/gl-ledger",
+  "/direct-costs",
 ];
 
 // Paths that bypass middleware entirely

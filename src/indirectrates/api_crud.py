@@ -333,6 +333,40 @@ class ScenarioEventUpdate(BaseModel):
     notes: str | None = None
 
 
+class GLEntryCreate(BaseModel):
+    period: str
+    account: str
+    amount: float
+    entity: str = ""
+
+
+class GLEntryUpdate(BaseModel):
+    period: str
+    account: str
+    amount: float
+    entity: str = ""
+
+
+class DirectCostEntryCreate(BaseModel):
+    period: str
+    project: str = ""
+    direct_labor: float = 0
+    direct_labor_hrs: float = 0
+    subk: float = 0
+    odc: float = 0
+    travel: float = 0
+
+
+class DirectCostEntryUpdate(BaseModel):
+    period: str
+    project: str = ""
+    direct_labor: float = 0
+    direct_labor_hrs: float = 0
+    subk: float = 0
+    odc: float = 0
+    travel: float = 0
+
+
 # ---------------------------------------------------------------------------
 # Dashboard Summary
 # ---------------------------------------------------------------------------
@@ -1807,3 +1841,349 @@ def forecast_from_db(
             media_type="application/zip",
             headers={"Content-Disposition": 'attachment; filename="rate_pack_output.zip"'},
         )
+
+
+# ---------------------------------------------------------------------------
+# GL Entries
+# ---------------------------------------------------------------------------
+
+_PERIOD_GL_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
+
+
+@router.get("/fiscal-years/{fy_id}/gl-entries")
+def list_gl_entries(
+    fy_id: int,
+    request: Request,
+    period: str | None = None,
+    account: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        return db.list_gl_entries(conn, user_id, fy_id, period=period, account=account, limit=limit, offset=offset)
+    finally:
+        conn.close()
+
+
+@router.get("/fiscal-years/{fy_id}/gl-entries/count")
+def count_gl_entries(
+    fy_id: int,
+    request: Request,
+    period: str | None = None,
+    account: str | None = None,
+):
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        return {"count": db.count_gl_entries(conn, user_id, fy_id, period=period, account=account)}
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/gl-entries", status_code=201)
+def create_gl_entry(fy_id: int, body: GLEntryCreate, request: Request):
+    user_id = require_auth(request)
+    if not _PERIOD_GL_RE.match(body.period):
+        raise HTTPException(status_code=422, detail="period must be YYYY-MM")
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        entry_id = db.create_gl_entry(conn, user_id, fy_id, body.period, body.account, body.amount, body.entity)
+        rows = db.list_gl_entries(conn, user_id, fy_id, limit=1, offset=0)
+        # Return the newly created entry
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, period, account, amount, entity, created_at FROM gl_entries WHERE id = %s", (entry_id,))
+            row = cur.fetchone()
+        return dict(row) if row else {"id": entry_id}
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/gl-entries/import")
+async def import_gl_entries(fy_id: int, request: Request, file: UploadFile = File(...)):
+    user_id = require_auth(request)
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows: list[dict] = []
+    errors: list[str] = []
+    line_num = 1
+    for row in reader:
+        line_num += 1
+        period = (row.get("Period") or "").strip()
+        account = (row.get("Account") or "").strip()
+        amount_raw = (row.get("Amount") or "").strip()
+        entity = (row.get("Entity") or "").strip()
+        if not period or not account or not amount_raw:
+            errors.append(f"Line {line_num}: missing Period, Account, or Amount")
+            continue
+        if not _PERIOD_GL_RE.match(period):
+            errors.append(f"Line {line_num}: invalid period '{period}' (expected YYYY-MM)")
+            continue
+        try:
+            amount = float(amount_raw)
+        except ValueError:
+            errors.append(f"Line {line_num}: non-numeric amount '{amount_raw}'")
+            continue
+        rows.append({"period": period, "account": account, "amount": amount, "entity": entity})
+
+    imported = 0
+    if rows:
+        conn = _conn()
+        try:
+            _check_fy_ownership(conn, fy_id, user_id)
+            imported = db.bulk_insert_gl_entries(conn, user_id, fy_id, rows)
+        finally:
+            conn.close()
+
+    return {"imported": imported, "errors": errors}
+
+
+@router.get("/fiscal-years/{fy_id}/gl-entries/export")
+def export_gl_entries(fy_id: int, request: Request):
+    from fastapi.responses import StreamingResponse
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        csv_str = db.get_gl_entries_as_csv(conn, user_id, fy_id)
+    finally:
+        conn.close()
+    return StreamingResponse(
+        io.StringIO(csv_str),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="GL_Actuals.csv"'},
+    )
+
+
+@router.delete("/fiscal-years/{fy_id}/gl-entries")
+def delete_all_gl_entries(fy_id: int, request: Request, confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Pass confirm=true to delete all GL entries for this fiscal year")
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        deleted = db.delete_gl_entries_for_fy(conn, user_id, fy_id)
+        return {"deleted": deleted}
+    finally:
+        conn.close()
+
+
+@router.put("/gl-entries/{entry_id}")
+def update_gl_entry(entry_id: int, body: GLEntryUpdate, request: Request):
+    user_id = require_auth(request)
+    if not _PERIOD_GL_RE.match(body.period):
+        raise HTTPException(status_code=422, detail="period must be YYYY-MM")
+    conn = _conn()
+    try:
+        if not db.update_gl_entry(conn, entry_id, user_id, body.period, body.account, body.amount, body.entity):
+            _404("GL entry")
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, period, account, amount, entity, created_at FROM gl_entries WHERE id = %s", (entry_id,))
+            row = cur.fetchone()
+        return dict(row) if row else {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.delete("/gl-entries/{entry_id}")
+def delete_gl_entry(entry_id: int, request: Request):
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        if not db.delete_gl_entry(conn, entry_id, user_id):
+            _404("GL entry")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Direct Cost Entries
+# ---------------------------------------------------------------------------
+
+@router.get("/fiscal-years/{fy_id}/direct-cost-entries")
+def list_direct_cost_entries(
+    fy_id: int,
+    request: Request,
+    period: str | None = None,
+    project: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        return db.list_direct_cost_entries(conn, user_id, fy_id, period=period, project=project, limit=limit, offset=offset)
+    finally:
+        conn.close()
+
+
+@router.get("/fiscal-years/{fy_id}/direct-cost-entries/count")
+def count_direct_cost_entries(
+    fy_id: int,
+    request: Request,
+    period: str | None = None,
+    project: str | None = None,
+):
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        return {"count": db.count_direct_cost_entries(conn, user_id, fy_id, period=period, project=project)}
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/direct-cost-entries", status_code=201)
+def create_direct_cost_entry(fy_id: int, body: DirectCostEntryCreate, request: Request):
+    user_id = require_auth(request)
+    if not _PERIOD_GL_RE.match(body.period):
+        raise HTTPException(status_code=422, detail="period must be YYYY-MM")
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        entry_id = db.create_direct_cost_entry(
+            conn, user_id, fy_id, body.period, body.project,
+            body.direct_labor, body.direct_labor_hrs, body.subk, body.odc, body.travel,
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, period, project, direct_labor, direct_labor_hrs, subk, odc, travel, created_at"
+                " FROM direct_cost_entries WHERE id = %s",
+                (entry_id,),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else {"id": entry_id}
+    finally:
+        conn.close()
+
+
+@router.post("/fiscal-years/{fy_id}/direct-cost-entries/import")
+async def import_direct_cost_entries(fy_id: int, request: Request, file: UploadFile = File(...)):
+    user_id = require_auth(request)
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows: list[dict] = []
+    errors: list[str] = []
+    line_num = 1
+    for row in reader:
+        line_num += 1
+        period = (row.get("Period") or "").strip()
+        project = (row.get("Project") or "").strip()
+        if not period:
+            errors.append(f"Line {line_num}: missing Period")
+            continue
+        if not _PERIOD_GL_RE.match(period):
+            errors.append(f"Line {line_num}: invalid period '{period}' (expected YYYY-MM)")
+            continue
+
+        def _f(key: str) -> float:
+            raw = (row.get(key) or "0").strip()
+            try:
+                return float(raw)
+            except ValueError:
+                return 0.0
+
+        rows.append({
+            "period": period,
+            "project": project,
+            "direct_labor": _f("DirectLabor$"),
+            "direct_labor_hrs": _f("DirectLaborHrs"),
+            "subk": _f("Subk"),
+            "odc": _f("ODC"),
+            "travel": _f("Travel"),
+        })
+
+    imported = 0
+    if rows:
+        conn = _conn()
+        try:
+            _check_fy_ownership(conn, fy_id, user_id)
+            imported = db.bulk_insert_direct_cost_entries(conn, user_id, fy_id, rows)
+        finally:
+            conn.close()
+
+    return {"imported": imported, "errors": errors}
+
+
+@router.get("/fiscal-years/{fy_id}/direct-cost-entries/export")
+def export_direct_cost_entries(fy_id: int, request: Request):
+    from fastapi.responses import StreamingResponse
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        csv_str = db.get_direct_cost_entries_as_csv(conn, user_id, fy_id)
+    finally:
+        conn.close()
+    return StreamingResponse(
+        io.StringIO(csv_str),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="Direct_Costs_By_Project.csv"'},
+    )
+
+
+@router.delete("/fiscal-years/{fy_id}/direct-cost-entries")
+def delete_all_direct_cost_entries(fy_id: int, request: Request, confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Pass confirm=true to delete all direct cost entries for this fiscal year")
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        _check_fy_ownership(conn, fy_id, user_id)
+        deleted = db.delete_direct_cost_entries_for_fy(conn, user_id, fy_id)
+        return {"deleted": deleted}
+    finally:
+        conn.close()
+
+
+@router.put("/direct-cost-entries/{entry_id}")
+def update_direct_cost_entry(entry_id: int, body: DirectCostEntryUpdate, request: Request):
+    user_id = require_auth(request)
+    if not _PERIOD_GL_RE.match(body.period):
+        raise HTTPException(status_code=422, detail="period must be YYYY-MM")
+    conn = _conn()
+    try:
+        if not db.update_direct_cost_entry(
+            conn, entry_id, user_id, body.period, body.project,
+            body.direct_labor, body.direct_labor_hrs, body.subk, body.odc, body.travel,
+        ):
+            _404("Direct cost entry")
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, period, project, direct_labor, direct_labor_hrs, subk, odc, travel, created_at"
+                " FROM direct_cost_entries WHERE id = %s",
+                (entry_id,),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.delete("/direct-cost-entries/{entry_id}")
+def delete_direct_cost_entry(entry_id: int, request: Request):
+    user_id = require_auth(request)
+    conn = _conn()
+    try:
+        if not db.delete_direct_cost_entry(conn, entry_id, user_id):
+            _404("Direct cost entry")
+        return {"ok": True}
+    finally:
+        conn.close()

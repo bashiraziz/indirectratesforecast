@@ -292,3 +292,162 @@ export async function downloadUploadedFile(fileId: number, fileName: string): Pr
 
 export const getStorageUsage = () =>
   fetchJSON<StorageUsage>("/api/storage-usage");
+
+// GL Entries
+export interface GLEntry {
+  id: number;
+  period: string;
+  account: string;
+  amount: number;
+  entity: string;
+  created_at: string;
+}
+
+export const listGLEntries = (
+  fyId: number,
+  params?: { period?: string; account?: string; limit?: number; offset?: number }
+) => {
+  const qs = new URLSearchParams();
+  if (params?.period) qs.set("period", params.period);
+  if (params?.account) qs.set("account", params.account);
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  const q = qs.toString();
+  return fetchJSON<GLEntry[]>(`/api/fiscal-years/${fyId}/gl-entries${q ? `?${q}` : ""}`);
+};
+
+export const countGLEntries = (
+  fyId: number,
+  params?: { period?: string; account?: string }
+) => {
+  const qs = new URLSearchParams();
+  if (params?.period) qs.set("period", params.period);
+  if (params?.account) qs.set("account", params.account);
+  const q = qs.toString();
+  return fetchJSON<{ count: number }>(`/api/fiscal-years/${fyId}/gl-entries/count${q ? `?${q}` : ""}`);
+};
+
+export const createGLEntry = (
+  fyId: number,
+  data: Omit<GLEntry, "id" | "created_at">
+) =>
+  fetchJSON<GLEntry>(`/api/fiscal-years/${fyId}/gl-entries`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateGLEntry = (
+  entryId: number,
+  data: Omit<GLEntry, "id" | "created_at">
+) =>
+  fetchJSON<GLEntry>(`/api/gl-entries/${entryId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const deleteGLEntry = (entryId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/gl-entries/${entryId}`, { method: "DELETE" });
+
+export async function importGLEntries(
+  fyId: number,
+  file: File
+): Promise<{ imported: number; errors: string[] }> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch(`/api/fiscal-years/${fyId}/gl-entries/import`, {
+    method: "POST",
+    body: form,
+  });
+  if (!resp.ok) {
+    throw new Error(await parseApiError(resp));
+  }
+  return resp.json();
+}
+
+export const deleteAllGLEntries = (fyId: number) =>
+  fetchJSON<{ deleted: number }>(`/api/fiscal-years/${fyId}/gl-entries?confirm=true`, {
+    method: "DELETE",
+  });
+
+export const exportGLEntriesUrl = (fyId: number) =>
+  `/api/fiscal-years/${fyId}/gl-entries/export`;
+
+// Direct Cost Entries
+export interface DirectCostEntry {
+  id: number;
+  period: string;
+  project: string;
+  direct_labor: number;
+  direct_labor_hrs: number;
+  subk: number;
+  odc: number;
+  travel: number;
+  created_at: string;
+}
+
+export const listDirectCostEntries = (
+  fyId: number,
+  params?: { period?: string; project?: string; limit?: number; offset?: number }
+) => {
+  const qs = new URLSearchParams();
+  if (params?.period) qs.set("period", params.period);
+  if (params?.project) qs.set("project", params.project);
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  const q = qs.toString();
+  return fetchJSON<DirectCostEntry[]>(`/api/fiscal-years/${fyId}/direct-cost-entries${q ? `?${q}` : ""}`);
+};
+
+export const countDirectCostEntries = (
+  fyId: number,
+  params?: { period?: string; project?: string }
+) => {
+  const qs = new URLSearchParams();
+  if (params?.period) qs.set("period", params.period);
+  if (params?.project) qs.set("project", params.project);
+  const q = qs.toString();
+  return fetchJSON<{ count: number }>(`/api/fiscal-years/${fyId}/direct-cost-entries/count${q ? `?${q}` : ""}`);
+};
+
+export const createDirectCostEntry = (
+  fyId: number,
+  data: Omit<DirectCostEntry, "id" | "created_at">
+) =>
+  fetchJSON<DirectCostEntry>(`/api/fiscal-years/${fyId}/direct-cost-entries`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateDirectCostEntry = (
+  entryId: number,
+  data: Omit<DirectCostEntry, "id" | "created_at">
+) =>
+  fetchJSON<DirectCostEntry>(`/api/direct-cost-entries/${entryId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const deleteDirectCostEntry = (entryId: number) =>
+  fetchJSON<{ ok: boolean }>(`/api/direct-cost-entries/${entryId}`, { method: "DELETE" });
+
+export async function importDirectCostEntries(
+  fyId: number,
+  file: File
+): Promise<{ imported: number; errors: string[] }> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch(`/api/fiscal-years/${fyId}/direct-cost-entries/import`, {
+    method: "POST",
+    body: form,
+  });
+  if (!resp.ok) throw new Error(await parseApiError(resp));
+  return resp.json();
+}
+
+export const deleteAllDirectCostEntries = (fyId: number) =>
+  fetchJSON<{ deleted: number }>(`/api/fiscal-years/${fyId}/direct-cost-entries?confirm=true`, {
+    method: "DELETE",
+  });
+
+export const exportDirectCostEntriesUrl = (fyId: number) =>
+  `/api/fiscal-years/${fyId}/direct-cost-entries/export`;

@@ -6,10 +6,67 @@ const GUEST_STEPS = [
   "Run forecast, review rates/charts, then download ZIP/Excel outputs.",
 ];
 
-const REGISTERED_STEPS = [
-  "Sign in to create a tenant-scoped workspace.",
-  "Configure Fiscal Years, COA, Pools, Mappings, Scenarios.",
-  "Run forecasts from DB config or uploads and track run history.",
+interface RegisteredStep {
+  label: string;
+  sub?: { label: string; href?: string; note?: string }[];
+  href?: string;
+}
+
+const REGISTERED_STEPS: RegisteredStep[] = [
+  {
+    label: "Create a Fiscal Year",
+    href: "/fiscal-years",
+    sub: [{ label: "Set name, start month, and end month for your contract period." }],
+  },
+  {
+    label: "Upload GL Actuals — pick one option:",
+    sub: [
+      {
+        label: "Option A: GL Ledger page — add/edit individual entries, import CSV, or export",
+        href: "/gl-ledger",
+        note: "Recommended: entries stored in DB, editable anytime",
+      },
+      {
+        label: "Option B: Data Files page — upload a GL_Actuals.csv blob",
+        href: "/data",
+        note: "Simpler; file replaced on each upload",
+      },
+    ],
+  },
+  {
+    label: "Upload Direct Costs by Project",
+    href: "/data",
+    sub: [{ label: "Upload Direct_Costs_By_Project.csv via Data Files." }],
+  },
+  {
+    label: "Configure Account Map — pick one option:",
+    sub: [
+      {
+        label: "Option A: Pools + Mappings pages — build pool groups, pools, and GL mappings in the UI",
+        href: "/pools",
+        note: "Persistent DB config; recommended for recurring forecasts",
+      },
+      {
+        label: "Option B: Data Files — upload Account_Map.csv blob",
+        href: "/data",
+      },
+    ],
+  },
+  {
+    label: "(Optional) Configure Scenarios",
+    href: "/scenarios",
+    sub: [{ label: "Add scenario events to model cost changes, new awards, or staffing adjustments." }],
+  },
+  {
+    label: "Run Forecast in DB mode",
+    href: "/forecast",
+    sub: [{ label: "Select fiscal year, choose scenario and parameters, then run. Output ZIP and history are saved." }],
+  },
+  {
+    label: "Review rates, download ZIP/Excel, and load prior runs from history",
+    href: "/forecast",
+    sub: [{ label: "Use the Rates and PSR/PST pages to drill into results." }],
+  },
 ];
 
 const DIFFERENCES = [
@@ -43,9 +100,39 @@ export default function GuidePage() {
 
       <section className="card" style={{ marginBottom: 12 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Registered Path</h2>
+        <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+          <strong>Data source priority:</strong> If GL Ledger entries exist for the fiscal year, they are used as the GL
+          actuals source. Otherwise the system falls back to the uploaded GL_Actuals.csv file.
+        </p>
         <ol style={{ marginTop: 0, marginBottom: 10, paddingLeft: 20 }}>
-          {REGISTERED_STEPS.map((s) => (
-            <li key={s} style={{ marginBottom: 6 }}>{s}</li>
+          {REGISTERED_STEPS.map((step, i) => (
+            <li key={i} style={{ marginBottom: 8 }}>
+              {step.href ? (
+                <Link href={step.href} style={{ fontWeight: 500 }}>
+                  {step.label}
+                </Link>
+              ) : (
+                <span style={{ fontWeight: 500 }}>{step.label}</span>
+              )}
+              {step.sub && (
+                <ul style={{ marginTop: 4, paddingLeft: 18, listStyleType: "disc" }}>
+                  {step.sub.map((sub, j) => (
+                    <li key={j} style={{ marginBottom: 4, fontSize: 13 }}>
+                      {sub.href ? (
+                        <Link href={sub.href}>{sub.label}</Link>
+                      ) : (
+                        sub.label
+                      )}
+                      {sub.note && (
+                        <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                          — {sub.note}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
           ))}
         </ol>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
