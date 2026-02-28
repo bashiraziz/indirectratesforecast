@@ -1,6 +1,6 @@
 """Generate realistic enterprise demo data for Meridian Federal Solutions.
 
-Populates DB with 4 fiscal years, ~60 GL accounts, 30 projects, 6 pool groups,
+Populates DB with 4 fiscal years, ~56 GL accounts, 30 projects, 4 pool groups,
 8 scenarios per FY, budget/provisional rates, revenue, and writes CSV files.
 """
 
@@ -87,12 +87,6 @@ CHART_OF_ACCOUNTS = [
     {"account": "8100.06", "name": "Marketing & Communications", "category": "G&A"},
     {"account": "8100.07", "name": "Corporate Insurance", "category": "G&A"},
     {"account": "8100.08", "name": "Audit & Compliance", "category": "G&A"},
-    # 8200.xx — B&P (2 accounts)
-    {"account": "8200.01", "name": "Proposal Labor", "category": "B&P"},
-    {"account": "8200.02", "name": "Proposal Materials & Printing", "category": "B&P"},
-    # 8300.xx — IR&D (2 accounts)
-    {"account": "8300.01", "name": "Research Labor", "category": "IR&D"},
-    {"account": "8300.02", "name": "Research Materials & Equipment", "category": "IR&D"},
     # 9100.xx — Unallowable (5 accounts)
     {"account": "9100.01", "name": "Entertainment", "category": "Unallowable"},
     {"account": "9100.02", "name": "Alcohol", "category": "Unallowable"},
@@ -102,7 +96,7 @@ CHART_OF_ACCOUNTS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Pool structure (6 groups)
+# Pool structure (4 groups)
 # ---------------------------------------------------------------------------
 
 DL_ACCOUNTS = [f"5100.0{i}" for i in range(1, 9)]
@@ -131,24 +125,9 @@ POOL_STRUCTURE = [
         "base_accounts": DL_ACCOUNTS,
     },
     {
-        "name": "Material Handling",
-        "base": "DL",
-        "cascade_order": 2,
-        "cost_accounts": ["5400.01", "5400.02"],  # subset of ODC — materials & equipment
-        "base_accounts": DL_ACCOUNTS,
-        "is_unallowable": False,
-    },
-    {
-        "name": "B&P/IR&D",
-        "base": "TCI",
-        "cascade_order": 3,
-        "cost_accounts": ["8200.01", "8200.02", "8300.01", "8300.02"],
-        "base_accounts": ALL_DIRECT,
-    },
-    {
         "name": "G&A",
         "base": "TCI",
-        "cascade_order": 4,
+        "cascade_order": 2,
         "cost_accounts": [
             "8100.01", "8100.02", "8100.03", "8100.04",
             "8100.05", "8100.06", "8100.07", "8100.08",
@@ -158,7 +137,7 @@ POOL_STRUCTURE = [
     {
         "name": "Unallowable",
         "base": "DL",
-        "cascade_order": 5,
+        "cascade_order": 3,
         "cost_accounts": ["9100.01", "9100.02", "9100.03", "9100.04", "9100.05"],
         "base_accounts": [],
         "is_unallowable": True,
@@ -173,7 +152,7 @@ POOL_STRUCTURE = [
 # so GL-derived and project-derived bases agree within ~5%.
 # DL base ~$1.65M/mo at FY2023 steady state, TCI ~$2.06M.
 # Pool amounts (6xxx, 7xxx, 8xxx) produce realistic rates:
-#   Fringe ~31% of DL, OH ~55% of DL, G&A ~15% of TCI, B&P/IR&D ~4% of TCI
+#   Fringe ~31% of DL, OH ~55% of DL, G&A ~15% of TCI
 _GL_BASE_AMOUNTS: dict[str, float] = {
     # Direct Labor (~$1.654M/mo total, aligned to project DL)
     "5100.01": 438000,   # Engineers
@@ -225,11 +204,6 @@ _GL_BASE_AMOUNTS: dict[str, float] = {
     "8100.06": 20000,    # Marketing
     "8100.07": 18000,    # Insurance
     "8100.08": 14000,    # Audit
-    # B&P/IR&D (~$86K/mo -> ~4.2% of $2.06M TCI base)
-    "8200.01": 45000,    # Proposal Labor
-    "8200.02": 9000,     # Proposal Materials
-    "8300.01": 24000,    # Research Labor
-    "8300.02": 8000,     # Research Materials
     # Unallowable (<0.5% of costs)
     "9100.01": 3500,     # Entertainment
     "9100.02": 800,      # Alcohol
@@ -298,17 +272,17 @@ _HRS_PER_MONTH = 173
 # ---------------------------------------------------------------------------
 
 _BUDGET_RATES = {
-    "DEMO-FY2023": {"Fringe": 0.310, "Overhead": 0.560, "G&A": 0.148, "B&P/IR&D": 0.042},
-    "DEMO-FY2024": {"Fringe": 0.315, "Overhead": 0.555, "G&A": 0.152, "B&P/IR&D": 0.044},
-    "DEMO-FY2025": {"Fringe": 0.320, "Overhead": 0.545, "G&A": 0.155, "B&P/IR&D": 0.045},
-    "DEMO-FY2026": {"Fringe": 0.325, "Overhead": 0.540, "G&A": 0.158, "B&P/IR&D": 0.046},
+    "DEMO-FY2023": {"Fringe": 0.310, "Overhead": 0.560, "G&A": 0.148},
+    "DEMO-FY2024": {"Fringe": 0.315, "Overhead": 0.555, "G&A": 0.152},
+    "DEMO-FY2025": {"Fringe": 0.320, "Overhead": 0.545, "G&A": 0.155},
+    "DEMO-FY2026": {"Fringe": 0.325, "Overhead": 0.540, "G&A": 0.158},
 }
 
 _PROVISIONAL_RATES = {
-    "DEMO-FY2023": {"Fringe": 0.305, "Overhead": 0.550, "G&A": 0.145, "B&P/IR&D": 0.040},
-    "DEMO-FY2024": {"Fringe": 0.312, "Overhead": 0.548, "G&A": 0.150, "B&P/IR&D": 0.043},
-    "DEMO-FY2025": {"Fringe": 0.318, "Overhead": 0.540, "G&A": 0.153, "B&P/IR&D": 0.044},
-    "DEMO-FY2026": {"Fringe": 0.322, "Overhead": 0.535, "G&A": 0.156, "B&P/IR&D": 0.045},
+    "DEMO-FY2023": {"Fringe": 0.305, "Overhead": 0.550, "G&A": 0.145},
+    "DEMO-FY2024": {"Fringe": 0.312, "Overhead": 0.548, "G&A": 0.150},
+    "DEMO-FY2025": {"Fringe": 0.318, "Overhead": 0.540, "G&A": 0.153},
+    "DEMO-FY2026": {"Fringe": 0.322, "Overhead": 0.535, "G&A": 0.156},
 }
 
 # ---------------------------------------------------------------------------
@@ -660,14 +634,14 @@ def _generate_scenarios_for_fy(
     count += 1
 
     # 6. Restructure — shift costs between pools
-    sid = db.create_scenario(conn, fy_id, "Restructure", "Cost restructuring: reduce OH, increase G&A and B&P")
+    sid = db.create_scenario(conn, fy_id, "Restructure", "Cost restructuring: reduce OH, increase G&A")
     db.create_scenario_event(
         conn, sid,
         effective_period=mid_period, event_type="ADJUST", project="",
         delta_direct_labor=0, delta_direct_labor_hrs=0,
         delta_subk=0, delta_odc=0, delta_travel=0,
-        pool_deltas=json.dumps({"Overhead": -50000, "G&A": 30000, "B&P/IR&D": 20000}),
-        notes="Facilities consolidation shifts costs from OH to G&A; increased B&P investment",
+        pool_deltas=json.dumps({"Overhead": -50000, "G&A": 50000}),
+        notes="Facilities consolidation shifts costs from OH to G&A",
     )
     count += 1
 

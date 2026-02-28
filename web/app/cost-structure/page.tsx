@@ -307,6 +307,221 @@ function GLAccountView({ details }: { details: PoolGroupDetail[] }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Cost Build-Up Calculator
+// ---------------------------------------------------------------------------
+
+const CALC_DEFAULTS = {
+  directLabor: 10000,
+  dlHours: 150,
+  subcontract: 25000,
+  odc: 5000,
+  travel: 2500,
+  fringeRate: 32,
+  overheadRate: 55,
+  gaRate: 18,
+};
+
+function fmt(n: number) {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+}
+function pct(n: number) {
+  return n.toFixed(2) + "%";
+}
+
+function CascadeRow({
+  label,
+  value,
+  indent = 0,
+  color,
+  separator,
+  dimmed,
+  bold,
+}: {
+  label: string;
+  value: number;
+  indent?: number;
+  color?: string;
+  separator?: boolean;
+  dimmed?: boolean;
+  bold?: boolean;
+}) {
+  const textClass = `${color ?? (dimmed ? "text-muted-foreground" : "text-foreground")} ${bold ? "font-semibold" : ""}`;
+  return (
+    <div className={`flex justify-between items-baseline gap-4 ${separator ? "border-t border-border pt-1.5 mt-1" : ""}`}>
+      <span className={`text-xs ${textClass}`} style={{ paddingLeft: indent * 16 }}>
+        {label}
+      </span>
+      <span className={`text-xs font-mono tabular-nums shrink-0 ${textClass}`}>
+        {fmt(value)}
+      </span>
+    </div>
+  );
+}
+
+function CostBuildUpCalculator() {
+  const [vals, setVals] = useState({ ...CALC_DEFAULTS });
+
+  const set = (k: keyof typeof CALC_DEFAULTS) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setVals((prev) => ({ ...prev, [k]: parseFloat(e.target.value) || 0 }));
+  };
+
+  // DCAA cascade
+  const fringe    = vals.directLabor * (vals.fringeRate / 100);
+  const ohBase    = vals.directLabor + fringe;
+  const overhead  = ohBase * (vals.overheadRate / 100);
+  const tci       = vals.directLabor + vals.subcontract + vals.odc + vals.travel + overhead;
+  const ga        = tci * (vals.gaRate / 100);
+  const totalDirect   = vals.directLabor + vals.subcontract + vals.odc + vals.travel;
+  const totalIndirect = fringe + overhead + ga;
+  const totalLoaded   = totalDirect + totalIndirect;
+  const indirectPct   = totalDirect > 0 ? (totalIndirect / totalDirect) * 100 : 0;
+
+  const inputCls = "w-28 text-right text-xs border border-input rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary";
+
+  return (
+    <div className="mt-8 border-t border-border pt-6">
+      <div className="flex items-center justify-between mb-1">
+        <div>
+          <h3 className="text-sm font-semibold m-0">Cost Build-Up Calculator</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            The Pool is the content (what you spend). The Structure is the math (how you apply it to contracts).
+            Edit any field — the cascade recalculates instantly.
+          </p>
+          {/* Formula legend */}
+          <div className="grid grid-cols-3 gap-3 mt-3 text-[11px]">
+            <div>
+              <span className="text-orange-400 font-semibold">Fringe</span>
+              <span className="text-muted-foreground"> = Fringe Rate × Direct Labor</span>
+            </div>
+            <div>
+              <span className="text-blue-400 font-semibold">Overhead</span>
+              <span className="text-muted-foreground"> = OH Rate × (DL + Fringe)</span>
+            </div>
+            <div>
+              <span className="text-green-400 font-semibold">G&A</span>
+              <span className="text-muted-foreground"> = G&A Rate × TCI</span>
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={() => setVals({ ...CALC_DEFAULTS })}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors bg-transparent! border-none! px-2 py-1 rounded hover:bg-accent shrink-0"
+        >
+          ↺ Reset
+        </button>
+      </div>
+
+      {/* Inputs */}
+      <div className="grid grid-cols-2 gap-4 mt-4 mb-5">
+        {/* Direct costs */}
+        <div className="border border-border rounded-lg p-4">
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-3">
+            Direct Costs — Project Input
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {([
+              { label: "Direct Labor $",   key: "directLabor",  prefix: "$" },
+              { label: "DL Hours",         key: "dlHours",      prefix: ""  },
+              { label: "Subcontract $",    key: "subcontract",  prefix: "$" },
+              { label: "ODC $",            key: "odc",          prefix: "$" },
+              { label: "Travel $",         key: "travel",       prefix: "$" },
+            ] as const).map(({ label, key, prefix }) => (
+              <div key={key} className="flex items-center justify-between gap-2">
+                <label className="text-xs text-muted-foreground">{label}</label>
+                <div className="flex items-center gap-1">
+                  {prefix && <span className="text-xs text-muted-foreground">{prefix}</span>}
+                  <input type="number" min="0" value={vals[key]} onChange={set(key)} className={inputCls} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Rates + summary */}
+        <div className="border border-border rounded-lg p-4 flex flex-col">
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-3">
+            Indirect Rates
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {([
+              { label: "Fringe Rate",   key: "fringeRate",   tier: "1st tier · base: DL",          color: "text-orange-400" },
+              { label: "Overhead Rate", key: "overheadRate", tier: "2nd tier · base: DL + Fringe",  color: "text-blue-400"   },
+              { label: "G&A Rate",      key: "gaRate",       tier: "3rd tier · base: TCI",          color: "text-green-400"  },
+            ] as const).map(({ label, key, tier, color }) => (
+              <div key={key} className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                  <div className={`text-[10px] ${color}`}>{tier}</div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <input type="number" min="0" max="999" step="0.01" value={vals[key]} onChange={set(key)}
+                    className="w-20 text-right text-xs border border-input rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary" />
+                  <span className="text-xs text-muted-foreground">%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Summary */}
+          <div className="mt-auto pt-4 border-t border-border">
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-2">Summary</div>
+            <div className="flex flex-col gap-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total Direct Costs</span>
+                <span className="font-mono">{fmt(totalDirect)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total Indirect Costs</span>
+                <span className="font-mono">{fmt(totalIndirect)}</span>
+              </div>
+              <div className="flex justify-between font-semibold border-t border-border pt-1 mt-1">
+                <span>Total Loaded Cost</span>
+                <span className="font-mono text-primary">{fmt(totalLoaded)}</span>
+              </div>
+              <div className="flex justify-between text-muted-foreground">
+                <span>Indirect burden on Direct</span>
+                <span className="font-mono">{pct(indirectPct)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Cascade waterfall */}
+      <div className="border border-border rounded-lg overflow-hidden">
+        <div className="bg-sidebar px-4 py-2 border-b border-border flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Build-Up Cascade — DCAA Correct Order
+          </span>
+          <span className="text-[10px] text-muted-foreground">Pool Rate × Base = Allocation</span>
+        </div>
+        <div className="p-4 space-y-1">
+          <CascadeRow label="Direct Labor" value={vals.directLabor} />
+          <CascadeRow
+            label={`+ Fringe  (${pct(vals.fringeRate)} × DL ${fmt(vals.directLabor)})`}
+            value={fringe} indent={1} color="text-orange-400"
+          />
+          <CascadeRow label="= Overhead Base  (DL + Fringe)" value={ohBase} separator dimmed />
+          <CascadeRow
+            label={`+ Overhead  (${pct(vals.overheadRate)} × overhead base ${fmt(ohBase)})`}
+            value={overhead} indent={1} color="text-blue-400"
+          />
+          <CascadeRow label="+ Subcontract" value={vals.subcontract} indent={1} />
+          <CascadeRow label="+ ODC" value={vals.odc} indent={1} />
+          <CascadeRow label="+ Travel" value={vals.travel} indent={1} />
+          <CascadeRow label="= Total Cost Input (TCI)" value={tci} separator dimmed />
+          <CascadeRow
+            label={`+ G&A  (${pct(vals.gaRate)} × TCI ${fmt(tci)})`}
+            value={ga} indent={1} color="text-green-400"
+          />
+          <CascadeRow label="= Total Loaded Cost" value={totalLoaded} separator bold color="text-primary" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CostStructurePage() {
   const [selectedFY, setSelectedFY] = useState<FiscalYear | null>(null);
   const [rateGroups, setRateGroups] = useState<RateGroup[]>([]);
@@ -452,6 +667,8 @@ export default function CostStructurePage() {
           )}
         </>
       )}
+
+      <CostBuildUpCalculator />
     </div>
   );
 }
