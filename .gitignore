@@ -29,3 +29,6 @@ enhancements
 
 
 .vercel
+
+LOCAL_SETUP.md
+auth_migrate.sql

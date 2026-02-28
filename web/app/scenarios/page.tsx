@@ -21,6 +21,7 @@ import {
   listPoolGroups,
 } from "@/lib/api";
 import type { FiscalYear, Scenario, ScenarioEvent, PoolGroup } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 const EVENT_TYPES = ["ADJUST", "WIN", "LOSE", "HIRE", "RIF", "OTHER"];
 
@@ -360,6 +361,12 @@ export default function ScenariosPage() {
       <p className="text-muted-foreground text-sm mb-4">
         Define scenario events (Win, Lose, Hire, etc.) that apply cost deltas to the forecast. Each scenario can have multiple events with effective periods.
       </p>
+      <NextStepHint
+        items={[
+          { label: "Compare scenario rates", href: "/rates", detail: "Inspect differences by scenario before forecasting." },
+          { label: "Run forecast pack", href: "/forecast", detail: "Generate outputs for one or all scenarios." },
+        ]}
+      />
 
       <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
 

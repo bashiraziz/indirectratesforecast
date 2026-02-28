@@ -15,6 +15,7 @@ import {
   GitBranch,
   GitFork,
   Home,
+  LifeBuoy,
   Layers,
   LayoutDashboard,
   LogIn,
@@ -232,6 +233,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         >
           <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5">
             <NavLink item={{ href: "/", label: "Home", icon: Home }} active={isActive("/")} collapsed={collapsed} />
+            <NavLink item={{ href: "/guide", label: "Guide", icon: LifeBuoy }} active={isActive("/guide")} collapsed={collapsed} />
 
             {!collapsed && (
               <button

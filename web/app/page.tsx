@@ -33,6 +33,7 @@ import {
   clearDemoData,
   getDashboardSummary,
   downloadForecastRun,
+  getStorageUsage,
 } from "../lib/api";
 import type { DashboardSummary, FYSummary, RecentRun } from "../lib/types";
 import { authClient } from "@/lib/auth-client";
@@ -205,14 +206,26 @@ function RecentRunsTable({ runs }: { runs: RecentRun[] }) {
   );
 }
 
-const WORKFLOW_STEPS = [
-  { icon: Calendar, title: "Fiscal Years", href: "/fiscal-years" },
-  { icon: BookOpen, title: "Chart of Accounts", href: "/chart-of-accounts" },
-  { icon: Layers, title: "Pool Setup", href: "/pools" },
-  { icon: GitFork, title: "Cost Structure", href: "/cost-structure" },
-  { icon: Tags, title: "Mappings", href: "/mappings" },
-  { icon: Play, title: "Forecast", href: "/forecast" },
-];
+type SetupStep = {
+  icon: React.ElementType;
+  title: string;
+  href: string;
+  description: string;
+  done: boolean;
+};
+
+type WalkthroughStep = {
+  title: string;
+  detail: string;
+  href: string;
+  cta: string;
+};
+
+type AccessRow = {
+  feature: string;
+  guest: string;
+  registered: string;
+};
 
 export default function HomePage() {
   const { data: session } = authClient.useSession();
@@ -221,6 +234,7 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [setupExpanded, setSetupExpanded] = useState(true);
   const chatRef = useRef<HTMLDivElement>(null);
+  const [storageUsage, setStorageUsage] = useState<{ used_mb: number; max_mb: number; pct_used: number } | null>(null);
 
   const [seedMsg, setSeedMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [seeding, setSeeding] = useState(false);
@@ -244,6 +258,32 @@ export default function HomePage() {
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStorage() {
+      if (!session?.user) {
+        setStorageUsage(null);
+        return;
+      }
+      try {
+        const usage = await getStorageUsage();
+        if (!cancelled) {
+          setStorageUsage({
+            used_mb: usage.used_mb,
+            max_mb: usage.max_mb,
+            pct_used: usage.pct_used,
+          });
+        }
+      } catch {
+        if (!cancelled) setStorageUsage(null);
+      }
+    }
+    loadStorage();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user]);
 
   const handleSeed = async () => {
     setSeeding(true);
@@ -317,10 +357,142 @@ export default function HomePage() {
     }
   };
 
-  const hasFYs = dashboard && dashboard.fiscal_years.length > 0;
+  const hasFYs = Boolean(dashboard && dashboard.fiscal_years.length > 0);
+  const hasAccounts = Boolean(dashboard?.fiscal_years.some((f) => f.chart_accounts > 0));
+  const hasPools = Boolean(dashboard?.fiscal_years.some((f) => f.pool_groups > 0 && f.gl_mappings > 0));
+  const hasScenarios = Boolean(dashboard?.fiscal_years.some((f) => f.scenarios > 0));
+  const hasInputs = Boolean(
+    dashboard?.fiscal_years.some(
+      (f) => f.reference_rates.budget > 0 || f.reference_rates.provisional > 0 || f.revenue_entries > 0
+    )
+  );
+  const hasRuns = Boolean(dashboard?.recent_runs.length);
+  const setupSteps: SetupStep[] = [
+    {
+      icon: Calendar,
+      title: "Create fiscal year",
+      href: "/fiscal-years",
+      description: "Start with fiscal-year dates and label.",
+      done: hasFYs,
+    },
+    {
+      icon: BookOpen,
+      title: "Load chart of accounts",
+      href: "/chart-of-accounts",
+      description: "Import or add GL accounts.",
+      done: hasAccounts,
+    },
+    {
+      icon: Layers,
+      title: "Build pool mappings",
+      href: "/mappings",
+      description: "Define pools and map GL accounts.",
+      done: hasPools,
+    },
+    {
+      icon: Tags,
+      title: "Add rates or revenue",
+      href: "/rates",
+      description: "Upload budget/provisional rates and revenue.",
+      done: hasInputs,
+    },
+    {
+      icon: GitFork,
+      title: "Create scenarios",
+      href: "/scenarios",
+      description: "Add baseline and what-if assumptions.",
+      done: hasScenarios,
+    },
+    {
+      icon: Play,
+      title: "Run forecast",
+      href: "/forecast",
+      description: "Generate the output pack and review trends.",
+      done: hasRuns,
+    },
+  ];
+  const completedSetupSteps = setupSteps.filter((s) => s.done).length;
+  const isAuthError = Boolean(error && /auth|unauthoriz/i.test(error));
   const totalRuns = dashboard ? dashboard.fiscal_years.reduce((s, f) => s + f.forecast_runs, 0) : 0;
   const totalScenarios = dashboard ? dashboard.fiscal_years.reduce((s, f) => s + f.scenarios, 0) : 0;
   const totalGL = dashboard ? dashboard.fiscal_years.reduce((s, f) => s + f.chart_accounts, 0) : 0;
+  const guestWalkthrough: WalkthroughStep[] = [
+    {
+      title: "Open Try Demo",
+      detail: "Use upload-only mode to kick the tires without an account.",
+      href: "/try-demo",
+      cta: "Open Try Demo",
+    },
+    {
+      title: "Upload required CSV inputs",
+      detail: "Upload one ZIP or 4 CSVs. Use templates in the Forecast page.",
+      href: "/try-demo",
+      cta: "Upload Inputs",
+    },
+    {
+      title: "Run forecast and download output",
+      detail: "Run once, review tables/charts, then download ZIP/Excel output.",
+      href: "/try-demo",
+      cta: "Run Forecast",
+    },
+  ];
+  const registeredWalkthrough: WalkthroughStep[] = [
+    {
+      title: "Sign in and create a fiscal year",
+      detail: "Create your workspace so data is scoped and persisted.",
+      href: "/auth/signin",
+      cta: "Sign In",
+    },
+    {
+      title: "Configure COA, pools, mappings, scenarios",
+      detail: "Use setup pages to build reusable DB-backed configuration.",
+      href: "/fiscal-years",
+      cta: "Start Setup",
+    },
+    {
+      title: "Run forecasts from DB or uploads",
+      detail: "Track run history and reuse files and setups across sessions.",
+      href: "/forecast",
+      cta: "Open Forecast",
+    },
+  ];
+  const accessRows: AccessRow[] = [
+    {
+      feature: "Upload CSV forecast runs",
+      guest: "Yes (Try Demo)",
+      registered: "Yes",
+    },
+    {
+      feature: "Save fiscal years and setup",
+      guest: "No",
+      registered: "Yes",
+    },
+    {
+      feature: "Use DB configuration pages",
+      guest: "No",
+      registered: "Yes",
+    },
+    {
+      feature: "Seed sample and demo datasets",
+      guest: "No",
+      registered: "Yes",
+    },
+    {
+      feature: "Forecast run history",
+      guest: "No",
+      registered: "Yes",
+    },
+    {
+      feature: "File storage and quota tracking",
+      guest: "No persistent storage",
+      registered: "Yes (per-account quota)",
+    },
+    {
+      feature: "Tenant-isolated data",
+      guest: "Not applicable",
+      registered: "Yes",
+    },
+  ];
 
   return (
     <main className="container" style={{ maxWidth: 960 }}>
@@ -349,9 +521,12 @@ export default function HomePage() {
             fontSize: 13,
           }}
         >
-          <span>Guest mode — fiscal year data won&apos;t be saved across sessions.</span>
-          <a href="/auth/signin" style={{ marginLeft: "auto", fontWeight: 600, color: "var(--color-primary)" }}>
-            Sign in →
+          <span>Guest mode: use Try Demo to upload CSVs and run a forecast without signing in.</span>
+          <a href="/try-demo" style={{ marginLeft: "auto", fontWeight: 600, color: "var(--color-primary)" }}>
+            Try Demo
+          </a>
+          <a href="/auth/signin" style={{ fontWeight: 600, color: "var(--color-primary)" }}>
+            Sign in
           </a>
         </div>
       )}
@@ -363,7 +538,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {error && !loading && (
+      {error && !loading && !(!session?.user && isAuthError) && (
         <div className="card" style={{ padding: 20, textAlign: "center", marginBottom: 16 }}>
           <AlertCircle className="w-6 h-6" style={{ margin: "0 auto 8px", color: "var(--color-destructive)" }} />
           <div style={{ fontSize: 14 }}>Could not load dashboard data</div>
@@ -371,6 +546,115 @@ export default function HomePage() {
           <button className="btn btn-outline" style={{ marginTop: 12 }} onClick={loadDashboard}>Retry</button>
         </div>
       )}
+
+      {!session?.user && isAuthError && !loading && (
+        <section className="card" style={{ padding: 24, textAlign: "center", marginBottom: 16 }}>
+          <AlertCircle className="w-6 h-6" style={{ margin: "0 auto 8px", color: "var(--color-primary)" }} />
+          <h2 style={{ margin: "0 0 6px", fontSize: 18 }}>Sign in required</h2>
+          <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+            This deployment requires authentication before dashboard data can be loaded.
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <a href="/try-demo">
+              <button className="btn btn-outline">Try Demo</button>
+            </a>
+            <a href="/auth/signin">
+              <button className="btn btn-primary">Continue to sign in</button>
+            </a>
+          </div>
+        </section>
+      )}
+
+      {session?.user && storageUsage && (
+        <section className="card" style={{ marginBottom: 16, padding: "14px 18px" }}>
+          <h2 style={{ margin: "0 0 6px", fontSize: 15 }}>Storage Quota</h2>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            {storageUsage.used_mb.toFixed(1)} MB used of {storageUsage.max_mb.toFixed(0)} MB ({storageUsage.pct_used.toFixed(1)}%)
+          </div>
+          <div style={{ height: 8, borderRadius: 999, background: "var(--color-muted)", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${Math.min(100, storageUsage.pct_used)}%`,
+                height: "100%",
+                background:
+                  storageUsage.pct_used >= 90
+                    ? "var(--color-destructive)"
+                    : storageUsage.pct_used >= 70
+                      ? "#f59e0b"
+                      : "var(--color-primary)",
+              }}
+            />
+          </div>
+        </section>
+      )}
+
+      <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>How To Use IndirectRates</h2>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          Choose the path that fits your goal: quick evaluation or full saved workspace.
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Guest Walkthrough (Try Demo)</h3>
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              {guestWalkthrough.map((step) => (
+                <li key={step.title} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{step.detail}</div>
+                  <Link href={step.href}>
+                    <button className="btn btn-outline" style={{ fontSize: 11, padding: "2px 8px" }}>{step.cta}</button>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Registered Walkthrough</h3>
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              {registeredWalkthrough.map((step) => (
+                <li key={step.title} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{step.detail}</div>
+                  <Link href={step.href}>
+                    <button className="btn btn-outline" style={{ fontSize: 11, padding: "2px 8px" }}>{step.cta}</button>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+
+        <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Guest vs Registered Access</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table" style={{ width: "100%", fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th>Capability</th>
+                <th>Guest</th>
+                <th>Registered</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accessRows.map((row) => (
+                <tr key={row.feature}>
+                  <td>{row.feature}</td>
+                  <td>{row.guest}</td>
+                  <td>{row.registered}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {!loading && dashboard && (
         <>
@@ -410,19 +694,38 @@ export default function HomePage() {
           {/* Recent Runs */}
           <RecentRunsTable runs={dashboard.recent_runs} />
 
-          {/* Workflow Stepper (compact) */}
-          <section className="card" style={{ marginBottom: 16, padding: "12px 20px" }}>
-            <h2 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>Setup Workflow</h2>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {WORKFLOW_STEPS.map((step, i) => (
-                <Link key={i} href={step.href} className="no-underline">
-                  <span
-                    className="badge"
-                    style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}
+          {/* Guided setup */}
+          <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>Guided Setup</h2>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+              {completedSetupSteps}/{setupSteps.length} steps complete
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {setupSteps.map((step) => (
+                <Link key={step.title} href={step.href} className="no-underline">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "8px 10px",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                      background: step.done
+                        ? "color-mix(in srgb, var(--color-primary) 8%, transparent)"
+                        : "transparent",
+                    }}
                   >
-                    <step.icon className="w-3 h-3" />
-                    {i + 1}. {step.title}
-                  </span>
+                    {step.done ? (
+                      <CheckCircle2 className="w-4 h-4" style={{ color: "var(--color-primary)" }} />
+                    ) : (
+                      <step.icon className="w-4 h-4 muted" />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>{step.description}</div>
+                    </div>
+                  </div>
                 </Link>
               ))}
             </div>
@@ -552,3 +855,5 @@ export default function HomePage() {
     </main>
   );
 }
+
+

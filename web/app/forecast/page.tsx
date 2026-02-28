@@ -1,12 +1,19 @@
 "use client";
 
 import JSZip from "jszip";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import * as XLSX from "xlsx";
 
 import { ChatPanel } from "../components/ChatPanel";
-import { listScenarios, listForecastRuns, deleteForecastRun, downloadForecastRun, listEntities } from "@/lib/api";
+import {
+  listScenarios,
+  listForecastRuns,
+  deleteForecastRun,
+  downloadForecastRun,
+  listEntities,
+  parseApiError,
+} from "@/lib/api";
 import type { Scenario, ForecastRun } from "@/lib/types";
 import { authClient } from "@/lib/auth-client";
 
@@ -14,6 +21,11 @@ interface GridData {
   headers: string[];
   rows: (string | number)[][];
 }
+
+type FileCheck = {
+  status: "missing" | "validating" | "valid" | "error";
+  issues: string[];
+};
 
 function fmtCell(val: string | number, header: string, isRatesTable: boolean): string {
   if (val === null || val === undefined || val === "") return "—";
@@ -48,7 +60,122 @@ function exportGridCsv(headers: string[], rows: (string | number)[][], filename:
   URL.revokeObjectURL(url);
 }
 
-function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onCellClick }: { title: string; data: GridData; isRatesTable: boolean; budgetRates?: Record<string, Record<string, number>> | null; thresholdRates?: Record<string, Record<string, number>> | null; onCellClick?: (period: string, header: string, value: string | number) => void }) {
+function statusPill(check: FileCheck | undefined, required: boolean): { label: string; bg: string; fg: string } {
+  if (!check || check.status === "missing") {
+    return required
+      ? { label: "Required", bg: "rgba(239,68,68,0.12)", fg: "rgb(220,60,60)" }
+      : { label: "Optional", bg: "rgba(148,163,184,0.18)", fg: "var(--color-muted-foreground)" };
+  }
+  if (check.status === "validating") {
+    return { label: "Validating", bg: "rgba(59,130,246,0.14)", fg: "rgb(59,130,246)" };
+  }
+  if (check.status === "valid") {
+    return { label: "Valid", bg: "rgba(34,197,94,0.15)", fg: "rgb(22,163,74)" };
+  }
+  return { label: "Issues", bg: "rgba(239,68,68,0.15)", fg: "rgb(220,60,60)" };
+}
+
+function FileDropField({
+  id,
+  label,
+  accept,
+  file,
+  required,
+  helper,
+  check,
+  onFile,
+  onTemplateDownload,
+}: {
+  id: string;
+  label: string;
+  accept: string;
+  file: File | null;
+  required: boolean;
+  helper?: string;
+  check?: FileCheck;
+  onFile: (f: File | null) => void;
+  onTemplateDownload?: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const pill = statusPill(check, required);
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragging(false);
+    onFile(e.dataTransfer.files?.[0] ?? null);
+  }
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <label className="muted" style={{ fontSize: 13, margin: 0 }}>{label}</label>
+        <span
+          style={{
+            fontSize: 11,
+            padding: "2px 8px",
+            borderRadius: 999,
+            background: pill.bg,
+            color: pill.fg,
+          }}
+        >
+          {pill.label}
+        </span>
+        {onTemplateDownload && (
+          <button
+            type="button"
+            className="btn btn-outline"
+            style={{ marginLeft: "auto", fontSize: 11, padding: "2px 8px" }}
+            onClick={onTemplateDownload}
+          >
+            Template
+          </button>
+        )}
+      </div>
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") inputRef.current?.click(); }}
+        aria-label={`Upload ${label}`}
+        style={{
+          border: `1px dashed ${dragging ? "var(--color-primary)" : "var(--color-border)"}`,
+          borderRadius: 8,
+          padding: "10px 12px",
+          cursor: "pointer",
+          background: dragging ? "color-mix(in srgb, var(--color-primary) 8%, transparent)" : "transparent",
+        }}
+      >
+        <input
+          ref={inputRef}
+          id={id}
+          type="file"
+          accept={accept}
+          style={{ display: "none" }}
+          onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+        />
+        <div style={{ fontSize: 12 }}>
+          {file ? (
+            <span>{file.name}</span>
+          ) : (
+            <span className="muted">Drop file here, or click to browse.</span>
+          )}
+        </div>
+        {helper && <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{helper}</div>}
+      </div>
+      {check?.status === "error" && check.issues.length > 0 && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+          {check.issues.slice(0, 2).join(" ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onCellClick, compact = false }: { title: string; data: GridData; isRatesTable: boolean; budgetRates?: Record<string, Record<string, number>> | null; thresholdRates?: Record<string, Record<string, number>> | null; onCellClick?: (period: string, header: string, value: string | number) => void; compact?: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   return (
     <div className="border border-border rounded-lg overflow-hidden mb-4">
@@ -78,7 +205,7 @@ function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onC
                   return (
                     <th
                       key={i}
-                      className={`px-3 py-2 font-medium min-w-20 ${
+                      className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} font-medium min-w-20 ${
                         i === 0 ? "text-left sticky left-0 bg-accent/30 min-w-30" : "text-right"
                       } `}
                       style={{
@@ -125,7 +252,7 @@ function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onC
                       return (
                         <td
                           key={ci}
-                          className={`px-3 py-2 ${
+                          className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} ${
                             ci === 0
                               ? "font-medium sticky left-0 bg-background/80"
                               : "text-right font-mono"
@@ -153,7 +280,7 @@ function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onC
   );
 }
 
-function ScenarioComparisonTable({ data, baseScenario }: { data: Map<string, GridData>; baseScenario: string }) {
+function ScenarioComparisonTable({ data, baseScenario, compact = false }: { data: Map<string, GridData>; baseScenario: string; compact?: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   const scenarioNames = Array.from(data.keys());
   const base = data.get(baseScenario) ?? data.get(scenarioNames[0])!;
@@ -229,7 +356,7 @@ function ScenarioComparisonTable({ data, baseScenario }: { data: Map<string, Gri
                   return (
                     <th
                       key={i}
-                      className={`px-3 py-2 font-medium min-w-20 ${i === 0 ? "text-left sticky left-0 bg-accent/30 min-w-30" : "text-right"}`}
+                      className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} font-medium min-w-20 ${i === 0 ? "text-left sticky left-0 bg-accent/30 min-w-30" : "text-right"}`}
                       style={{
                         fontFamily: "monospace",
                         backgroundColor: isDelta ? "rgba(99,140,255,0.12)" : undefined,
@@ -254,7 +381,7 @@ function ScenarioComparisonTable({ data, baseScenario }: { data: Map<string, Gri
                     return (
                       <td
                         key={ci}
-                        className={`px-3 py-2 ${ci === 0 ? "font-medium sticky left-0 bg-background/80" : "text-right font-mono"}`}
+                        className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} ${ci === 0 ? "font-medium sticky left-0 bg-background/80" : "text-right font-mono"}`}
                         style={{ backgroundColor: bgColor }}
                       >
                         {ci === 0 ? String(cell) : typeof cell === "number"
@@ -296,7 +423,7 @@ function fiscalYearOf(period: string, fyStartMonth: number): string {
  * Expects headers like: Period, Project, DirectLabor$, Subk, ...
  */
 /** overBudgetKeys: Set of "RateName|Period" strings where the actual rate exceeds budget */
-function ImpactsTable({ data, fyStartMonth, overBudgetKeys }: { data: GridData; fyStartMonth: number; overBudgetKeys?: Set<string> }) {
+function ImpactsTable({ data, fyStartMonth, overBudgetKeys, compact = false }: { data: GridData; fyStartMonth: number; overBudgetKeys?: Set<string>; compact?: boolean }) {
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
   const [showDetail, setShowDetail] = useState(true);
   const [showMtd, setShowMtd] = useState(true);
@@ -436,7 +563,7 @@ function ImpactsTable({ data, fyStartMonth, overBudgetKeys }: { data: GridData; 
                     return (
                       <th
                         key={i}
-                        className={`px-3 py-2 font-medium min-w-20 ${
+                        className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} font-medium min-w-20 ${
                           i <= 1 ? "text-left sticky bg-accent/30 min-w-30" : "text-right"
                         }`}
                         style={{
@@ -487,7 +614,7 @@ function ImpactsTable({ data, fyStartMonth, overBudgetKeys }: { data: GridData; 
                         return (
                           <td
                             key={ci}
-                            className={`px-3 py-2 ${
+                            className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} ${
                               ci <= 1
                                 ? `sticky font-medium ${d.isTotalRow ? "" : "bg-background/80"}`
                                 : "text-right font-mono"
@@ -532,8 +659,167 @@ function guessDataDir(fyName: string): string {
   return "data";
 }
 
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+type CsvRule = {
+  required: string[];
+  numeric?: string[];
+  period?: string[];
+};
+
+const CSV_RULES: Record<string, CsvRule> = {
+  "GL_Actuals.csv": {
+    required: ["Period", "Account", "Amount"],
+    numeric: ["Amount"],
+    period: ["Period"],
+  },
+  "Account_Map.csv": {
+    required: ["Account", "Pool", "BaseCategory", "IsUnallowable"],
+  },
+  "Direct_Costs_By_Project.csv": {
+    required: ["Period", "Project", "DirectLabor$", "DirectLaborHrs", "Subk", "ODC", "Travel"],
+    numeric: ["DirectLabor$", "DirectLaborHrs", "Subk", "ODC", "Travel"],
+    period: ["Period"],
+  },
+  "Scenario_Events.csv": {
+    required: ["Scenario", "EffectivePeriod", "Type"],
+    numeric: [
+      "DeltaDirectLabor$",
+      "DeltaDirectLaborHrs",
+      "DeltaSubk",
+      "DeltaODC",
+      "DeltaTravel",
+      "DeltaPoolFringe",
+      "DeltaPoolOverhead",
+      "DeltaPoolGA",
+    ],
+    period: ["EffectivePeriod"],
+  },
+};
+
+function normalizeHeader(header: string): string {
+  return header.trim().toLowerCase();
+}
+
+function parseCsvAoaFromArrayBuffer(buf: ArrayBuffer): string[][] {
+  const wb = XLSX.read(buf, { type: "array" });
+  const firstSheet = wb.SheetNames[0];
+  if (!firstSheet) return [];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: "" }) as unknown[][];
+  return aoa.map((row) => row.map((cell) => String(cell ?? "").trim()));
+}
+
+function parseCsvAoaFromText(text: string): string[][] {
+  const wb = XLSX.read(text, { type: "string" });
+  const firstSheet = wb.SheetNames[0];
+  if (!firstSheet) return [];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: "" }) as unknown[][];
+  return aoa.map((row) => row.map((cell) => String(cell ?? "").trim()));
+}
+
+function validateCsvRows(canonicalName: string, rows: string[][]): string[] {
+  const rule = CSV_RULES[canonicalName];
+  if (!rule) return [];
+
+  const issues: string[] = [];
+  const pushIssue = (message: string) => {
+    if (issues.length < 12) issues.push(message);
+  };
+
+  if (!rows.length) {
+    pushIssue(`${canonicalName}: file is empty.`);
+    return issues;
+  }
+
+  const headers = rows[0] ?? [];
+  const headerToIndex = new Map<string, number>();
+  headers.forEach((h, i) => headerToIndex.set(normalizeHeader(h), i));
+
+  const missing = rule.required.filter((h) => !headerToIndex.has(normalizeHeader(h)));
+  if (missing.length > 0) {
+    pushIssue(`${canonicalName}: missing required columns: ${missing.join(", ")}.`);
+    return issues;
+  }
+
+  let dataRows = 0;
+  for (let i = 1; i < rows.length && dataRows < 200; i++) {
+    const row = rows[i] ?? [];
+    const hasData = row.some((cell) => cell.trim() !== "");
+    if (!hasData) continue;
+    dataRows += 1;
+
+    for (const periodCol of rule.period ?? []) {
+      const idx = headerToIndex.get(normalizeHeader(periodCol));
+      if (idx === undefined) continue;
+      const value = row[idx]?.trim() ?? "";
+      if (!value) {
+        pushIssue(`${canonicalName} row ${i + 1}: ${periodCol} is blank.`);
+      } else if (!PERIOD_RE.test(value)) {
+        pushIssue(`${canonicalName} row ${i + 1}: ${periodCol} must be YYYY-MM (got '${value}').`);
+      }
+    }
+
+    for (const numericCol of rule.numeric ?? []) {
+      const idx = headerToIndex.get(normalizeHeader(numericCol));
+      if (idx === undefined) continue;
+      const raw = row[idx]?.trim() ?? "";
+      if (!raw) continue;
+      const num = Number(raw.replace(/,/g, ""));
+      if (!Number.isFinite(num)) {
+        pushIssue(`${canonicalName} row ${i + 1}: ${numericCol} must be numeric (got '${raw}').`);
+      }
+    }
+
+    if (issues.length >= 12) break;
+  }
+
+  if (!dataRows) {
+    pushIssue(`${canonicalName}: no data rows found.`);
+  }
+  return issues;
+}
+
+async function validateCsvFile(canonicalName: string, file: File): Promise<string[]> {
+  try {
+    const buf = await file.arrayBuffer();
+    const rows = parseCsvAoaFromArrayBuffer(buf);
+    return validateCsvRows(canonicalName, rows);
+  } catch {
+    return [`${canonicalName}: could not parse CSV.`];
+  }
+}
+
+async function validateInputZip(zipFile: File): Promise<string[]> {
+  try {
+    const zip = await JSZip.loadAsync(await zipFile.arrayBuffer());
+    const files = Object.values(zip.files).filter((f) => !f.dir);
+    const byBaseName = new Map<string, JSZip.JSZipObject>();
+    for (const file of files) {
+      const baseName = file.name.split("/").pop() ?? file.name;
+      byBaseName.set(baseName.toLowerCase(), file);
+    }
+
+    const issues: string[] = [];
+    for (const requiredName of Object.keys(CSV_RULES)) {
+      const entry = byBaseName.get(requiredName.toLowerCase());
+      if (!entry) {
+        issues.push(`ZIP is missing ${requiredName}.`);
+        continue;
+      }
+      const text = await entry.async("string");
+      const rows = parseCsvAoaFromText(text);
+      issues.push(...validateCsvRows(requiredName, rows));
+      if (issues.length >= 12) break;
+    }
+    return issues.slice(0, 12);
+  } catch {
+    return ["Selected ZIP could not be read."];
+  }
+}
+
 export default function ForecastPage() {
   const { data: session } = authClient.useSession();
+  const [demoMode, setDemoMode] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("upload");
   const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);
   const [selectedFyId, setSelectedFyId] = useState<number | null>(null);
@@ -555,8 +841,24 @@ export default function ForecastPage() {
   const [forecastRuns, setForecastRuns] = useState<ForecastRun[]>([]);
   const [entities, setEntities] = useState<string[]>([]);
   const [selectedEntity, setSelectedEntity] = useState("");
+  const [validationIssues, setValidationIssues] = useState<string[]>([]);
+  const [fileChecks, setFileChecks] = useState<Record<string, FileCheck>>({});
+  const [compactTables, setCompactTables] = useState(false);
+  const [compareRunA, setCompareRunA] = useState<number | "">("");
+  const [compareRunB, setCompareRunB] = useState<number | "">("");
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setDemoMode(params.get("mode") === "demo");
+  }, []);
+
+  useEffect(() => {
+    if (demoMode) {
+      setInputMode("upload");
+      setFiscalYears([]);
+      setSelectedFyId(null);
+      return;
+    }
     fetch("/api/fiscal-years")
       .then((r) => (r.ok ? r.json() : []))
       .then((data: FiscalYear[]) => {
@@ -564,7 +866,31 @@ export default function ForecastPage() {
         if (data.length > 0) setSelectedFyId(data[0].id);
       })
       .catch(() => {});
-  }, []);
+  }, [demoMode]);
+
+  useEffect(() => {
+    if (demoMode && inputMode !== "upload") {
+      setInputMode("upload");
+    }
+  }, [demoMode, inputMode]);
+
+  useEffect(() => {
+    setFileChecks({});
+    setValidationIssues([]);
+  }, [inputMode, demoMode]);
+
+  useEffect(() => {
+    if (forecastRuns.length >= 2) {
+      setCompareRunA(forecastRuns[0].id);
+      setCompareRunB(forecastRuns[1].id);
+    } else if (forecastRuns.length === 1) {
+      setCompareRunA(forecastRuns[0].id);
+      setCompareRunB("");
+    } else {
+      setCompareRunA("");
+      setCompareRunB("");
+    }
+  }, [forecastRuns]);
 
   // Load scenarios when FY changes (in DB mode)
   const loadScenarios = useCallback(async () => {
@@ -656,9 +982,59 @@ export default function ForecastPage() {
     }
   }, [inputMode, selectedFyId, fiscalYears]);
 
+  function setCheck(key: string, status: FileCheck["status"], issues: string[] = []) {
+    setFileChecks((prev) => ({ ...prev, [key]: { status, issues } }));
+  }
+
+  async function validateAndSetFile(
+    key: string,
+    setter: (f: File | null) => void,
+    file: File | null,
+    options?: { zip?: boolean; canonicalName?: string }
+  ) {
+    setter(file);
+    if (!file) {
+      setCheck(key, "missing", []);
+      return;
+    }
+    setCheck(key, "validating", []);
+    const issues = options?.zip
+      ? await validateInputZip(file)
+      : await validateCsvFile(options?.canonicalName || key, file);
+    setCheck(key, issues.length ? "error" : "valid", issues.slice(0, 8));
+  }
+
+  async function handleGLFileChange(file: File | null, setter: (f: File | null) => void) {
+    await validateAndSetFile("GL_Actuals.csv", setter, file, { canonicalName: "GL_Actuals.csv" });
+    if (!file) {
+      setEntities([]);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || "");
+      const lines = text.split("\n");
+      const headers = lines[0]?.split(",").map((h) => h.trim());
+      const entityIdx = headers?.indexOf("Entity") ?? -1;
+      if (entityIdx >= 0) {
+        const ents = new Set<string>();
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i]?.split(",");
+          const val = cols?.[entityIdx]?.trim();
+          if (val) ents.add(val);
+        }
+        setEntities(Array.from(ents).sort());
+      } else {
+        setEntities([]);
+      }
+    };
+    reader.readAsText(file);
+  }
+
   async function runForecast() {
     setRunning(true);
     setError(null);
+    setValidationIssues([]);
     setNarratives([]);
     setChartUrls([]);
     setRatesGrid(null);
@@ -671,6 +1047,27 @@ export default function ForecastPage() {
     setAllScenariosRates(null);
 
     try {
+      const issues: string[] = [];
+      if (inputMode === "upload") {
+        if (zipFile) {
+          issues.push(...(await validateInputZip(zipFile)));
+        } else {
+          if (gl) issues.push(...(await validateCsvFile("GL_Actuals.csv", gl)));
+          if (map) issues.push(...(await validateCsvFile("Account_Map.csv", map)));
+          if (direct) issues.push(...(await validateCsvFile("Direct_Costs_By_Project.csv", direct)));
+          if (events) issues.push(...(await validateCsvFile("Scenario_Events.csv", events)));
+        }
+      } else {
+        // DB mode allows optional upload overrides; validate only provided files.
+        if (gl) issues.push(...(await validateCsvFile("GL_Actuals.csv", gl)));
+        if (direct) issues.push(...(await validateCsvFile("Direct_Costs_By_Project.csv", direct)));
+        if (events) issues.push(...(await validateCsvFile("Scenario_Events.csv", events)));
+      }
+      if (issues.length) {
+        setValidationIssues(issues.slice(0, 12));
+        throw new Error("Input validation failed. Fix the CSV issues below and run again.");
+      }
+
       const form = new FormData();
       if (!compareMode && scenario.trim()) form.set("scenario", scenario.trim());
       form.set("forecast_months", String(forecastMonths));
@@ -702,8 +1099,7 @@ export default function ForecastPage() {
 
       const resp = await fetch("/api/forecast", { method: "POST", body: form });
       if (!resp.ok) {
-        const txt = await resp.text();
-        throw new Error(txt || `Forecast failed: HTTP ${resp.status}`);
+        throw new Error(await parseApiError(resp));
       }
 
       const blob = await resp.blob();
@@ -947,6 +1343,11 @@ export default function ForecastPage() {
     "Scenario_Events.csv": "Scenario,EffectivePeriod,Type,Project,DeltaDirectLabor$,DeltaDirectLaborHrs,DeltaSubk,DeltaODC,DeltaTravel,DeltaPoolFringe,DeltaPoolOverhead,DeltaPoolGA,Notes\nBase,2025-07,ADJUST,,0,0,0,0,0,0,0,0,No changes\n",
   };
 
+  const requiredCsvKeys = ["GL_Actuals.csv", "Account_Map.csv", "Direct_Costs_By_Project.csv", "Scenario_Events.csv"];
+  const uploadReady = zipFile
+    ? fileChecks["ZIP"]?.status === "valid"
+    : requiredCsvKeys.every((k) => fileChecks[k]?.status === "valid");
+
   // Compute which rate/period combos exceed budget (for highlighting both tables)
   const overBudgetKeys: Set<string> = (() => {
     if (!budgetRates || !ratesGrid) return new Set<string>();
@@ -1068,6 +1469,17 @@ export default function ForecastPage() {
     return lines.join("\n");
   })();
 
+  const runA = forecastRuns.find((r) => r.id === compareRunA) || null;
+  const runB = forecastRuns.find((r) => r.id === compareRunB) || null;
+  const runDelta = runA && runB
+    ? {
+        months: runB.forecast_months - runA.forecast_months,
+        runRate: runB.run_rate_months - runA.run_rate_months,
+        sizeKb: Math.round((runB.zip_size - runA.zip_size) / 1024),
+        hoursBetween: Math.round((new Date(runB.created_at).getTime() - new Date(runA.created_at).getTime()) / (1000 * 60 * 60)),
+      }
+    : null;
+
   return (
     <main className="container">
       {!session?.user && (
@@ -1084,9 +1496,13 @@ export default function ForecastPage() {
             fontSize: 13,
           }}
         >
-          <span>Guest mode — results won&apos;t be saved.</span>
+          <span>
+            {demoMode
+              ? "Try Demo mode: upload your CSVs, run forecast, and download results without creating an account."
+              : "Guest mode - results won't be saved."}
+          </span>
           <a href="/auth/signin" style={{ marginLeft: "auto", fontWeight: 600, color: "var(--color-primary)" }}>
-            Sign in to save →
+            Sign in to save
           </a>
         </div>
       )}
@@ -1110,19 +1526,24 @@ export default function ForecastPage() {
 
           <div className="field">
             <label>Input mode</label>
-            <div style={{ display: "flex", gap: 16 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                <input type="radio" name="inputMode" checked={inputMode === "upload"} onChange={() => setInputMode("upload")} />
-                Upload CSVs
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                <input type="radio" name="inputMode" checked={inputMode === "db"} onChange={() => setInputMode("db")} disabled={fiscalYears.length === 0} />
-                Use DB configuration
-                {fiscalYears.length === 0 && <span className="muted" style={{ fontSize: 11 }}>(no fiscal years configured)</span>}
-              </label>
-            </div>
+            {demoMode ? (
+              <div className="muted" style={{ fontSize: 12 }}>
+                Try Demo uses upload mode only.
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 16 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                  <input type="radio" name="inputMode" checked={inputMode === "upload"} onChange={() => setInputMode("upload")} />
+                  Upload CSVs
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                  <input type="radio" name="inputMode" checked={inputMode === "db"} onChange={() => setInputMode("db")} disabled={fiscalYears.length === 0} />
+                  Use DB configuration
+                  {fiscalYears.length === 0 && <span className="muted" style={{ fontSize: 11 }}>(no fiscal years configured)</span>}
+                </label>
+              </div>
+            )}
           </div>
-
           {inputMode === "db" && (
             <>
               <div className="field">
@@ -1158,25 +1579,36 @@ export default function ForecastPage() {
 
               <div className="field">
                 <label>Optional: Override data files</label>
-                {([
-                  ["GL_Actuals.csv", setGl] as const,
-                  ["Direct_Costs_By_Project.csv", setDirect] as const,
-                  ["Scenario_Events.csv", setEvents] as const,
-                ]).map(([name, setter]) => (
-                  <div key={name}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <label className="muted" style={{ fontSize: 13, margin: 0 }}>{name}</label>
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); downloadTemplate(name, templates[name]); }}
-                        style={{ fontSize: 11, opacity: 0.6 }}
-                      >
-                        download template
-                      </a>
-                    </div>
-                    <input type="file" accept=".csv" onChange={(e) => setter(e.target.files?.[0] || null)} />
-                  </div>
-                ))}
+                <FileDropField
+                  id="db-gl-actuals"
+                  label="GL_Actuals.csv"
+                  accept=".csv"
+                  file={gl}
+                  required={false}
+                  check={fileChecks["GL_Actuals.csv"]}
+                  onTemplateDownload={() => downloadTemplate("GL_Actuals.csv", templates["GL_Actuals.csv"])}
+                  onFile={(f) => handleGLFileChange(f, setGl)}
+                />
+                <FileDropField
+                  id="db-direct-costs"
+                  label="Direct_Costs_By_Project.csv"
+                  accept=".csv"
+                  file={direct}
+                  required={false}
+                  check={fileChecks["Direct_Costs_By_Project.csv"]}
+                  onTemplateDownload={() => downloadTemplate("Direct_Costs_By_Project.csv", templates["Direct_Costs_By_Project.csv"])}
+                  onFile={(f) => validateAndSetFile("Direct_Costs_By_Project.csv", setDirect, f, { canonicalName: "Direct_Costs_By_Project.csv" })}
+                />
+                <FileDropField
+                  id="db-scenario-events"
+                  label="Scenario_Events.csv"
+                  accept=".csv"
+                  file={events}
+                  required={false}
+                  check={fileChecks["Scenario_Events.csv"]}
+                  onTemplateDownload={() => downloadTemplate("Scenario_Events.csv", templates["Scenario_Events.csv"])}
+                  onFile={(f) => validateAndSetFile("Scenario_Events.csv", setEvents, f, { canonicalName: "Scenario_Events.csv" })}
+                />
               </div>
             </>
           )}
@@ -1185,68 +1617,84 @@ export default function ForecastPage() {
             <>
               <div className="field">
                 <label>Option A: Upload a ZIP containing the 4 CSVs</label>
-                <input
-                  type="file"
+                <FileDropField
+                  id="upload-zip"
+                  label="Forecast Inputs ZIP"
                   accept=".zip"
-                  onChange={(e) => setZipFile(e.target.files?.[0] || null)}
+                  file={zipFile}
+                  required={true}
+                  check={fileChecks["ZIP"]}
+                  helper="ZIP should include GL_Actuals.csv, Account_Map.csv, Direct_Costs_By_Project.csv, Scenario_Events.csv."
+                  onFile={(f) => validateAndSetFile("ZIP", setZipFile, f, { zip: true })}
                 />
                 <div className="muted">ZIP should include: GL_Actuals.csv, Account_Map.csv, Direct_Costs_By_Project.csv, Scenario_Events.csv</div>
               </div>
 
               <div className="field">
                 <label>Option B: Upload each CSV</label>
-                {([
-                  ["GL_Actuals.csv", setGl] as const,
-                  ["Account_Map.csv", setMap] as const,
-                  ["Direct_Costs_By_Project.csv", setDirect] as const,
-                  ["Scenario_Events.csv", setEvents] as const,
-                ]).map(([name, setter]) => (
-                  <div key={name}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <label className="muted" style={{ fontSize: 13, margin: 0 }}>{name}</label>
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); downloadTemplate(name, templates[name]); }}
-                        style={{ fontSize: 11, opacity: 0.6 }}
-                      >
-                        download template
-                      </a>
-                    </div>
-                    <input type="file" accept=".csv" onChange={(e) => {
-                      const f = e.target.files?.[0] || null;
-                      setter(f);
-                      // Detect entities from GL_Actuals
-                      if (name === "GL_Actuals.csv" && f) {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const text = reader.result as string;
-                          const lines = text.split("\n");
-                          const headers = lines[0]?.split(",").map(h => h.trim());
-                          const entityIdx = headers?.indexOf("Entity") ?? -1;
-                          if (entityIdx >= 0) {
-                            const ents = new Set<string>();
-                            for (let i = 1; i < lines.length; i++) {
-                              const cols = lines[i]?.split(",");
-                              const val = cols?.[entityIdx]?.trim();
-                              if (val) ents.add(val);
-                            }
-                            setEntities(Array.from(ents).sort());
-                          } else {
-                            setEntities([]);
-                          }
-                        };
-                        reader.readAsText(f);
-                      } else if (name === "GL_Actuals.csv" && !f) {
-                        setEntities([]);
-                      }
-                    }} />
-                  </div>
-                ))}
+                <FileDropField
+                  id="upload-gl-actuals"
+                  label="GL_Actuals.csv"
+                  accept=".csv"
+                  file={gl}
+                  required={!zipFile}
+                  check={fileChecks["GL_Actuals.csv"]}
+                  onTemplateDownload={() => downloadTemplate("GL_Actuals.csv", templates["GL_Actuals.csv"])}
+                  onFile={(f) => handleGLFileChange(f, setGl)}
+                />
+                <FileDropField
+                  id="upload-account-map"
+                  label="Account_Map.csv"
+                  accept=".csv"
+                  file={map}
+                  required={!zipFile}
+                  check={fileChecks["Account_Map.csv"]}
+                  onTemplateDownload={() => downloadTemplate("Account_Map.csv", templates["Account_Map.csv"])}
+                  onFile={(f) => validateAndSetFile("Account_Map.csv", setMap, f, { canonicalName: "Account_Map.csv" })}
+                />
+                <FileDropField
+                  id="upload-direct-costs"
+                  label="Direct_Costs_By_Project.csv"
+                  accept=".csv"
+                  file={direct}
+                  required={!zipFile}
+                  check={fileChecks["Direct_Costs_By_Project.csv"]}
+                  onTemplateDownload={() => downloadTemplate("Direct_Costs_By_Project.csv", templates["Direct_Costs_By_Project.csv"])}
+                  onFile={(f) => validateAndSetFile("Direct_Costs_By_Project.csv", setDirect, f, { canonicalName: "Direct_Costs_By_Project.csv" })}
+                />
+                <FileDropField
+                  id="upload-scenario-events"
+                  label="Scenario_Events.csv"
+                  accept=".csv"
+                  file={events}
+                  required={!zipFile}
+                  check={fileChecks["Scenario_Events.csv"]}
+                  onTemplateDownload={() => downloadTemplate("Scenario_Events.csv", templates["Scenario_Events.csv"])}
+                  onFile={(f) => validateAndSetFile("Scenario_Events.csv", setEvents, f, { canonicalName: "Scenario_Events.csv" })}
+                />
               </div>
 
               <div className="field">
                 <label>Optional: Upload a rates config YAML</label>
                 <input type="file" accept=".yaml,.yml" onChange={(e) => setConfig(e.target.files?.[0] || null)} />
+              </div>
+              <div
+                style={{
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  fontSize: 12,
+                  background: uploadReady
+                    ? "color-mix(in srgb, var(--color-primary) 8%, transparent)"
+                    : "transparent",
+                }}
+              >
+                <strong>Upload readiness:</strong>{" "}
+                {uploadReady
+                  ? "Ready to run forecast."
+                  : zipFile
+                    ? "Fix ZIP validation issues before running."
+                    : "Provide all four CSV files (or a valid ZIP)."}
               </div>
             </>
           )}
@@ -1315,9 +1763,20 @@ export default function ForecastPage() {
             />
           </div>
 
-          <button onClick={runForecast} disabled={running}>
+          <button onClick={runForecast} disabled={running} aria-label="Run forecast">
             {running ? "Running..." : "Run forecast"}
           </button>
+
+          {validationIssues.length > 0 && (
+            <div className="error" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>CSV validation issues</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {validationIssues.map((issue, idx) => (
+                  <li key={`${issue}-${idx}`}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {error && (
             <div style={{ marginTop: 12 }} className="error">
@@ -1367,6 +1826,15 @@ export default function ForecastPage() {
           <section className="card">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <h2 style={{ marginTop: 0, marginBottom: 0 }}>Forecast Data</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={compactTables}
+                    onChange={() => setCompactTables((v) => !v)}
+                  />
+                  Compact tables
+                </label>
               {inputMode === "upload" && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                   <label style={{ opacity: 0.7 }}>FY starts:</label>
@@ -1381,6 +1849,7 @@ export default function ForecastPage() {
                   </select>
                 </div>
               )}
+              </div>
             </div>
             {thresholdBreaches.length > 0 && (
               <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, padding: "12px 16px", marginBottom: 16 }}>
@@ -1400,15 +1869,16 @@ export default function ForecastPage() {
               </div>
             )}
             {compareMode && allScenariosRates && allScenariosRates.size > 1 && (
-              <ScenarioComparisonTable data={allScenariosRates} baseScenario="Base" />
+              <ScenarioComparisonTable data={allScenariosRates} baseScenario="Base" compact={compactTables} />
             )}
             {ratesGrid && <GridTable title="Rates" data={ratesGrid} isRatesTable={true} budgetRates={budgetRates} thresholdRates={thresholdRates}
               onCellClick={poolsGrid || basesGrid ? (period, header, value) => {
                 const rateName = header.replace(" (MTD)", "").replace(" (YTD)", "");
                 setDrilldown({ rateName, period, rateValue: typeof value === "number" ? value : 0 });
               } : undefined}
+              compact={compactTables}
             />}
-            {impactsGrid && <ImpactsTable data={impactsGrid} fyStartMonth={fyStartMonth} overBudgetKeys={overBudgetKeys} />}
+            {impactsGrid && <ImpactsTable data={impactsGrid} fyStartMonth={fyStartMonth} overBudgetKeys={overBudgetKeys} compact={compactTables} />}
           </section>
         </>
       )}
@@ -1447,6 +1917,31 @@ export default function ForecastPage() {
             <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
               Past runs are saved automatically. Click download to retrieve a previous output.
             </div>
+            <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 10, marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Compare runs</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                <select value={compareRunA} onChange={(e) => setCompareRunA(Number(e.target.value))}>
+                  {forecastRuns.map((r) => (
+                    <option key={`a-${r.id}`} value={r.id}>
+                      #{r.id} {r.scenario || "(all)"} {new Date(r.created_at + "Z").toLocaleDateString()}
+                    </option>
+                  ))}
+                </select>
+                <span className="muted">vs</span>
+                <select value={compareRunB} onChange={(e) => setCompareRunB(Number(e.target.value))}>
+                  {forecastRuns.map((r) => (
+                    <option key={`b-${r.id}`} value={r.id}>
+                      #{r.id} {r.scenario || "(all)"} {new Date(r.created_at + "Z").toLocaleDateString()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {runA && runB && runDelta && (
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Forecast months Delta: {runDelta.months >= 0 ? "+" : ""}{runDelta.months} | Run-rate Delta: {runDelta.runRate >= 0 ? "+" : ""}{runDelta.runRate} | ZIP size Delta: {runDelta.sizeKb >= 0 ? "+" : ""}{runDelta.sizeKb} KB | Time gap: {runDelta.hoursBetween}h
+                </div>
+              )}
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
@@ -1470,6 +1965,7 @@ export default function ForecastPage() {
                       <td className="px-3 py-2 text-right">
                         <button
                           style={{ fontSize: 11, padding: "2px 8px", marginRight: 4 }}
+                          aria-label={`Download forecast run ${run.id}`}
                           onClick={async () => {
                             try {
                               const blob = await downloadForecastRun(run.id);
@@ -1488,6 +1984,7 @@ export default function ForecastPage() {
                         </button>
                         <button
                           style={{ fontSize: 11, padding: "2px 8px", opacity: 0.6 }}
+                          aria-label={`Delete forecast run ${run.id}`}
                           onClick={async () => {
                             if (!confirm("Delete this forecast run?")) return;
                             try {
@@ -1624,3 +2121,5 @@ export default function ForecastPage() {
     </main>
   );
 }
+
+

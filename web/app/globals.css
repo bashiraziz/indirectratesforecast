@@ -192,6 +192,15 @@ select:focus {
   box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 button {
   border-radius: var(--radius-md);
   border: 1px solid transparent;

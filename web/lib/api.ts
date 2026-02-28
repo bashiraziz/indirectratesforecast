@@ -20,14 +20,54 @@ import type {
 
 const BASE = "";
 
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as Record<string, unknown>;
+    const loc = Array.isArray(first?.loc) ? first.loc.join(".") : "";
+    const msg = typeof first?.msg === "string" ? first.msg : "";
+    if (loc && msg) return `${loc}: ${msg}`;
+    if (msg) return msg;
+  }
+  if (detail && typeof detail === "object") {
+    const obj = detail as Record<string, unknown>;
+    if (typeof obj.message === "string") return obj.message;
+    if (typeof obj.detail === "string") return obj.detail;
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+export async function parseApiError(resp: Response): Promise<string> {
+  try {
+    const data = (await resp.clone().json()) as {
+      detail?: unknown;
+      error?: { message?: string; request_id?: string };
+    };
+    const message =
+      (typeof data?.error?.message === "string" && data.error.message) ||
+      formatErrorDetail(data?.detail) ||
+      `HTTP ${resp.status}`;
+    const requestId =
+      typeof data?.error?.request_id === "string" ? data.error.request_id : "";
+    return requestId ? `${message} (request ${requestId})` : message;
+  } catch {
+    const text = await resp.text().catch(() => "");
+    return text || `HTTP ${resp.status}`;
+  }
+}
+
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${url}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(text || `HTTP ${resp.status}`);
+    throw new Error(await parseApiError(resp));
   }
   return resp.json();
 }
@@ -98,8 +138,7 @@ export async function uploadReferenceRates(fyId: number, file: File): Promise<{ 
   form.append("file", file);
   const resp = await fetch(`/api/fiscal-years/${fyId}/reference-rates/upload`, { method: "POST", body: form });
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    throw new Error(await parseApiError(resp));
   }
   return resp.json();
 }
@@ -210,7 +249,7 @@ export const deleteForecastRun = (runId: number) =>
   fetchJSON<{ ok: boolean }>(`/api/forecast-runs/${runId}`, { method: "DELETE" });
 export async function downloadForecastRun(runId: number): Promise<Blob> {
   const resp = await fetch(`/api/forecast-runs/${runId}/download`);
-  if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`);
+  if (!resp.ok) throw new Error(await parseApiError(resp));
   return resp.blob();
 }
 
@@ -231,8 +270,7 @@ export async function uploadFYFile(fyId: number, fileType: string, file: File): 
   form.append("file_type", fileType);
   const resp = await fetch(`/api/fiscal-years/${fyId}/files`, { method: "POST", body: form });
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail));
+    throw new Error(await parseApiError(resp));
   }
   return resp.json();
 }
@@ -242,7 +280,7 @@ export const deleteUploadedFile = (fileId: number) =>
 
 export async function downloadUploadedFile(fileId: number, fileName: string): Promise<void> {
   const resp = await fetch(`/api/files/${fileId}/download`);
-  if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`);
+  if (!resp.ok) throw new Error(await parseApiError(resp));
   const blob = await resp.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

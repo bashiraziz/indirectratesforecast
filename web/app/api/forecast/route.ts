@@ -26,9 +26,15 @@ export async function POST(req: Request) {
   // Read the raw body and forward with original Content-Type header
   // to avoid multipart FormData re-serialization issues.
   const body = await req.arrayBuffer();
+  const forwardHeaders: Record<string, string> = {
+    "content-type": req.headers.get("content-type") || "",
+  };
+  const userId = req.headers.get("x-user-id");
+  if (userId) forwardHeaders["x-user-id"] = userId;
+
   const resp = await fetch(`${base}/forecast`, {
     method: "POST",
-    headers: { "content-type": req.headers.get("content-type") || "" },
+    headers: forwardHeaders,
     body,
   });
 

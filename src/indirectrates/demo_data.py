@@ -790,7 +790,7 @@ def _write_scenario_events(data_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def seed_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
+def seed_demo_data(conn, data_dir: Path | str, user_id: str = "") -> dict[str, Any]:
     """Seed the database with realistic enterprise demo data and write CSV files.
 
     Creates 4 fiscal years (DEMO-FY2023 through DEMO-FY2026) with full pool
@@ -800,11 +800,11 @@ def seed_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
     data_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(42)
 
-    # Check if already seeded
+    # Check if already seeded (scoped to this user)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id FROM fiscal_years WHERE name LIKE %s",
-            (f"{DEMO_FY_PREFIX}%",),
+            "SELECT id FROM fiscal_years WHERE name LIKE %s AND user_id = %s",
+            (f"{DEMO_FY_PREFIX}%", user_id),
         )
         existing = cur.fetchone()
     if existing:
@@ -820,7 +820,7 @@ def seed_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
 
     for fy_idx, fy_def in enumerate(FY_DEFS):
         # 1. Create fiscal year
-        fy_id = db.create_fiscal_year(conn, fy_def["name"], fy_def["start"], fy_def["end"])
+        fy_id = db.create_fiscal_year(conn, fy_def["name"], fy_def["start"], fy_def["end"], user_id=user_id)
         fy_ids.append(fy_id)
 
         # 2. Bulk-insert chart of accounts
@@ -885,14 +885,14 @@ def seed_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
     }
 
 
-def clear_demo_data(conn, data_dir: Path | str) -> dict[str, Any]:
+def clear_demo_data(conn, data_dir: Path | str, user_id: str = "") -> dict[str, Any]:
     """Remove all DEMO-* fiscal years (CASCADE deletes children) and CSV files."""
     data_dir = Path(data_dir)
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, name FROM fiscal_years WHERE name LIKE %s",
-            (f"{DEMO_FY_PREFIX}%",),
+            "SELECT id, name FROM fiscal_years WHERE name LIKE %s AND user_id = %s",
+            (f"{DEMO_FY_PREFIX}%", user_id),
         )
         rows = cur.fetchall()
 

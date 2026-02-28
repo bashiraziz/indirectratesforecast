@@ -40,6 +40,7 @@ import {
   listChartOfAccounts,
 } from "@/lib/api";
 import type { FiscalYear, RateGroup, PoolGroup, Pool, GLMapping, ChartAccount, BaseAccount } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 // ---------------------------------------------------------------------------
 // Small dialog component
@@ -1030,6 +1031,12 @@ export default function PoolSetupPage() {
       <p className="text-muted-foreground text-sm mb-4">
         Configure rate groups, indirect cost pools, and assign GL accounts from the Chart of Accounts as cost accounts (numerator) and base accounts (denominator).
       </p>
+      <NextStepHint
+        items={[
+          { label: "Map cost categories", href: "/mappings", detail: "Align Labor/ODC/Subk category mappings." },
+          { label: "Validate formulas", href: "/cost-structure", detail: "Review cascade formulas by category and GL." },
+        ]}
+      />
 
       <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
 

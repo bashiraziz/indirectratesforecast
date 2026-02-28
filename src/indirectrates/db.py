@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from contextlib import contextmanager
 from typing import Any, Generator
 
@@ -40,8 +41,40 @@ def get_connection() -> psycopg2.extensions.connection:
         or os.environ.get("DATABASE_URL")
         or "postgresql://indirectrates:dev@localhost:5432/indirectrates"
     )
-    conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn
+    try:
+        connect_timeout = int(os.environ.get("DB_CONNECT_TIMEOUT_SECONDS", "5"))
+    except ValueError:
+        connect_timeout = 5
+    try:
+        retries = int(os.environ.get("DB_CONNECT_RETRIES", "2"))
+    except ValueError:
+        retries = 2
+    try:
+        backoff_seconds = float(os.environ.get("DB_CONNECT_RETRY_BACKOFF_SECONDS", "0.25"))
+    except ValueError:
+        backoff_seconds = 0.25
+
+    retries = max(0, retries)
+    backoff_seconds = max(0.0, backoff_seconds)
+
+    last_exc: psycopg2.OperationalError | None = None
+    for attempt in range(retries + 1):
+        try:
+            conn = psycopg2.connect(
+                url,
+                cursor_factory=psycopg2.extras.RealDictCursor,
+                connect_timeout=connect_timeout,
+            )
+            return conn
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            if attempt >= retries:
+                break
+            time.sleep(backoff_seconds * (2 ** attempt))
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Failed to establish database connection")
 
 
 @contextmanager
@@ -1312,13 +1345,17 @@ def delete_forecast_run(conn: psycopg2.extensions.connection, run_id: int) -> bo
 
 
 def get_dashboard_summary(
-    conn: psycopg2.extensions.connection, user_id: str | None = None
+    conn: psycopg2.extensions.connection, user_id: str | None = None, demo_only: bool = False
 ) -> dict[str, Any]:
     with conn.cursor() as cur:
         if user_id is not None:
             cur.execute(
                 "SELECT * FROM fiscal_years WHERE user_id = %s ORDER BY start_month DESC",
                 (user_id,),
+            )
+        elif demo_only:
+            cur.execute(
+                "SELECT * FROM fiscal_years WHERE name LIKE 'DEMO-%' ORDER BY start_month DESC"
             )
         else:
             cur.execute("SELECT * FROM fiscal_years ORDER BY start_month DESC")
@@ -1395,6 +1432,16 @@ def get_dashboard_summary(
                    WHERE fy.user_id = %s
                    ORDER BY fr.created_at DESC LIMIT 5""",
                 (user_id,),
+            )
+        elif demo_only:
+            cur.execute(
+                """SELECT fr.id, fr.fiscal_year_id, fy.name AS fiscal_year_name,
+                          fr.scenario, fr.forecast_months, fr.created_at,
+                          octet_length(fr.output_zip) AS zip_size
+                   FROM forecast_runs fr
+                   LEFT JOIN fiscal_years fy ON fr.fiscal_year_id = fy.id
+                   WHERE fy.name LIKE 'DEMO-%'
+                   ORDER BY fr.created_at DESC LIMIT 5"""
             )
         else:
             cur.execute(

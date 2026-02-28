@@ -19,6 +19,7 @@ import {
   uploadReferenceRates,
 } from "@/lib/api";
 import type { FiscalYear, PoolGroup, ReferenceRate, Scenario } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -697,6 +698,12 @@ export default function RatesPage() {
       <p className="text-muted-foreground text-sm mb-4">
         Actual vs Budget vs Provisional rates with YTD tracking.
       </p>
+      <NextStepHint
+        items={[
+          { label: "Review category mappings", href: "/mappings", detail: "Ensure cost categories are mapped correctly." },
+          { label: "Run full forecast", href: "/forecast", detail: "Use rates output to generate final forecast pack." },
+        ]}
+      />
 
       <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
 

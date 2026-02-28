@@ -50,6 +50,156 @@ def _check_fy_ownership(conn, fy_id: int, user_id: str | None) -> dict[str, Any]
     return fy
 
 
+def _assert_fy_access(conn, request: Request, fy_id: int) -> tuple[str, dict[str, Any]]:
+    user_id = require_auth(request)
+    fy = _check_fy_ownership(conn, fy_id, user_id)
+    return user_id, fy
+
+
+def _resource_fy_id(conn, query: str, params: tuple[Any, ...], item: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        row = cur.fetchone()
+    if not row:
+        _404(item)
+    fy_id = row["fiscal_year_id"]
+    if fy_id is None:
+        raise HTTPException(status_code=403, detail=f"{item} is not associated with a fiscal year")
+    return int(fy_id)
+
+
+def _assert_rate_group_access(conn, request: Request, rg_id: int) -> int:
+    fy_id = _resource_fy_id(conn, "SELECT fiscal_year_id FROM rate_groups WHERE id = %s", (rg_id,), "Rate group")
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_pool_group_access(conn, request: Request, pg_id: int) -> int:
+    fy_id = _resource_fy_id(conn, "SELECT fiscal_year_id FROM pool_groups WHERE id = %s", (pg_id,), "Pool group")
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_pool_access(conn, request: Request, pool_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        """
+        SELECT pg.fiscal_year_id
+        FROM pools p
+        JOIN pool_groups pg ON p.pool_group_id = pg.id
+        WHERE p.id = %s
+        """,
+        (pool_id,),
+        "Pool",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_gl_mapping_access(conn, request: Request, mapping_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        """
+        SELECT pg.fiscal_year_id
+        FROM gl_account_mappings gm
+        JOIN pools p ON gm.pool_id = p.id
+        JOIN pool_groups pg ON p.pool_group_id = pg.id
+        WHERE gm.id = %s
+        """,
+        (mapping_id,),
+        "GL mapping",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_cost_category_access(conn, request: Request, cc_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        "SELECT fiscal_year_id FROM cost_category_mappings WHERE id = %s",
+        (cc_id,),
+        "Cost category",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_chart_account_access(conn, request: Request, ca_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        "SELECT fiscal_year_id FROM chart_of_accounts WHERE id = %s",
+        (ca_id,),
+        "Chart account",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_base_account_access(conn, request: Request, ba_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        """
+        SELECT pg.fiscal_year_id
+        FROM pool_group_base_accounts ba
+        JOIN pool_groups pg ON ba.pool_group_id = pg.id
+        WHERE ba.id = %s
+        """,
+        (ba_id,),
+        "Base account",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_scenario_access(conn, request: Request, scenario_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        "SELECT fiscal_year_id FROM scenarios WHERE id = %s",
+        (scenario_id,),
+        "Scenario",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_scenario_event_access(conn, request: Request, event_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        """
+        SELECT s.fiscal_year_id
+        FROM scenario_events se
+        JOIN scenarios s ON se.scenario_id = s.id
+        WHERE se.id = %s
+        """,
+        (event_id,),
+        "Scenario event",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_forecast_run_access(conn, request: Request, run_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        "SELECT fiscal_year_id FROM forecast_runs WHERE id = %s",
+        (run_id,),
+        "Forecast run",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
+def _assert_uploaded_file_access(conn, request: Request, file_id: int) -> int:
+    fy_id = _resource_fy_id(
+        conn,
+        "SELECT fiscal_year_id FROM uploaded_files WHERE id = %s",
+        (file_id,),
+        "File",
+    )
+    _assert_fy_access(conn, request, fy_id)
+    return fy_id
+
+
 # ---------------------------------------------------------------------------
 # Pydantic request models
 # ---------------------------------------------------------------------------
@@ -192,7 +342,9 @@ def dashboard_summary(request: Request):
     user_id = get_current_user(request)
     conn = _conn()
     try:
-        return db.get_dashboard_summary(conn, user_id=user_id)
+        if user_id:
+            return db.get_dashboard_summary(conn, user_id=user_id)
+        return db.get_dashboard_summary(conn, demo_only=True)
     finally:
         conn.close()
 
@@ -203,7 +355,7 @@ def dashboard_summary(request: Request):
 
 @router.get("/fiscal-years")
 def list_fiscal_years(request: Request):
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         return db.list_fiscal_years(conn, user_id=user_id)
@@ -213,7 +365,7 @@ def list_fiscal_years(request: Request):
 
 @router.post("/fiscal-years", status_code=201)
 def create_fiscal_year(body: FiscalYearCreate, request: Request):
-    user_id = get_current_user(request) or ""
+    user_id = require_auth(request)
     conn = _conn()
     try:
         fy_id = db.create_fiscal_year(conn, body.name, body.start_month, body.end_month, user_id=user_id)
@@ -224,7 +376,7 @@ def create_fiscal_year(body: FiscalYearCreate, request: Request):
 
 @router.get("/fiscal-years/{fy_id}")
 def get_fiscal_year(fy_id: int, request: Request):
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         fy = db.get_fiscal_year(conn, fy_id, user_id=user_id)
@@ -237,7 +389,7 @@ def get_fiscal_year(fy_id: int, request: Request):
 
 @router.delete("/fiscal-years/{fy_id}")
 def delete_fiscal_year(fy_id: int, request: Request):
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         _check_fy_ownership(conn, fy_id, user_id)
@@ -254,13 +406,11 @@ def delete_fiscal_year(fy_id: int, request: Request):
 
 @router.post("/fiscal-years/{fy_id}/copy-setup", status_code=201)
 def copy_fy_setup(fy_id: int, body: CopyFYSetup, request: Request):
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         target = _check_fy_ownership(conn, fy_id, user_id)
-        source = db.get_fiscal_year(conn, body.source_fy_id)
-        if not source:
-            _404("Source fiscal year")
+        source = _check_fy_ownership(conn, body.source_fy_id, user_id)
         counts = db.copy_fy_setup(conn, body.source_fy_id, fy_id)
         return {"ok": True, "source": source["name"], "target": target["name"], **counts}
     finally:
@@ -272,18 +422,20 @@ def copy_fy_setup(fy_id: int, body: CopyFYSetup, request: Request):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/rate-groups")
-def list_rate_groups(fy_id: int):
+def list_rate_groups(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_rate_groups(conn, fy_id)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years/{fy_id}/rate-groups", status_code=201)
-def create_rate_group(fy_id: int, body: RateGroupCreate):
+def create_rate_group(fy_id: int, body: RateGroupCreate, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         rg_id = db.create_rate_group(conn, fy_id, body.name, body.display_order)
         return {"id": rg_id, "fiscal_year_id": fy_id, **body.model_dump()}
     finally:
@@ -291,9 +443,10 @@ def create_rate_group(fy_id: int, body: RateGroupCreate):
 
 
 @router.put("/rate-groups/{rg_id}")
-def update_rate_group(rg_id: int, body: RateGroupUpdate):
+def update_rate_group(rg_id: int, body: RateGroupUpdate, request: Request):
     conn = _conn()
     try:
+        _assert_rate_group_access(conn, request, rg_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -305,9 +458,10 @@ def update_rate_group(rg_id: int, body: RateGroupUpdate):
 
 
 @router.delete("/rate-groups/{rg_id}")
-def delete_rate_group(rg_id: int):
+def delete_rate_group(rg_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_rate_group_access(conn, request, rg_id)
         if not db.delete_rate_group(conn, rg_id):
             _404("Rate group")
         return {"ok": True}
@@ -316,15 +470,11 @@ def delete_rate_group(rg_id: int):
 
 
 @router.get("/rate-groups/{rg_id}/pool-groups")
-def list_pool_groups_by_rate_group(rg_id: int):
+def list_pool_groups_by_rate_group(rg_id: int, request: Request):
     conn = _conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT fiscal_year_id FROM rate_groups WHERE id = %s", (rg_id,))
-            row = cur.fetchone()
-        if not row:
-            _404("Rate group")
-        return db.list_pool_groups(conn, row["fiscal_year_id"], rate_group_id=rg_id)
+        fy_id = _assert_rate_group_access(conn, request, rg_id)
+        return db.list_pool_groups(conn, fy_id, rate_group_id=rg_id)
     finally:
         conn.close()
 
@@ -334,18 +484,24 @@ def list_pool_groups_by_rate_group(rg_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/pool-groups")
-def list_pool_groups(fy_id: int):
+def list_pool_groups(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_pool_groups(conn, fy_id)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years/{fy_id}/pool-groups", status_code=201)
-def create_pool_group(fy_id: int, body: PoolGroupCreate):
+def create_pool_group(fy_id: int, body: PoolGroupCreate, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
+        if body.rate_group_id is not None:
+            rg_fy_id = _assert_rate_group_access(conn, request, body.rate_group_id)
+            if rg_fy_id != fy_id:
+                raise HTTPException(status_code=400, detail="rate_group_id must belong to the same fiscal year")
         pg_id = db.create_pool_group(
             conn, fy_id, body.name, body.base, body.display_order,
             rate_group_id=body.rate_group_id, cascade_order=body.cascade_order,
@@ -356,9 +512,14 @@ def create_pool_group(fy_id: int, body: PoolGroupCreate):
 
 
 @router.put("/pool-groups/{pg_id}")
-def update_pool_group(pg_id: int, body: PoolGroupUpdate):
+def update_pool_group(pg_id: int, body: PoolGroupUpdate, request: Request):
     conn = _conn()
     try:
+        fy_id = _assert_pool_group_access(conn, request, pg_id)
+        if body.rate_group_id is not None:
+            rg_fy_id = _assert_rate_group_access(conn, request, body.rate_group_id)
+            if rg_fy_id != fy_id:
+                raise HTTPException(status_code=400, detail="rate_group_id must belong to the same fiscal year")
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -370,9 +531,10 @@ def update_pool_group(pg_id: int, body: PoolGroupUpdate):
 
 
 @router.delete("/pool-groups/{pg_id}")
-def delete_pool_group(pg_id: int):
+def delete_pool_group(pg_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_pool_group_access(conn, request, pg_id)
         if not db.delete_pool_group(conn, pg_id):
             _404("Pool group")
         return {"ok": True}
@@ -385,18 +547,20 @@ def delete_pool_group(pg_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/pool-groups/{pg_id}/pools")
-def list_pools(pg_id: int):
+def list_pools(pg_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_pool_group_access(conn, request, pg_id)
         return db.list_pools(conn, pg_id)
     finally:
         conn.close()
 
 
 @router.post("/pool-groups/{pg_id}/pools", status_code=201)
-def create_pool(pg_id: int, body: PoolCreate):
+def create_pool(pg_id: int, body: PoolCreate, request: Request):
     conn = _conn()
     try:
+        _assert_pool_group_access(conn, request, pg_id)
         pool_id = db.create_pool(conn, pg_id, body.name, body.display_order)
         return {"id": pool_id, "pool_group_id": pg_id, **body.model_dump()}
     finally:
@@ -404,9 +568,10 @@ def create_pool(pg_id: int, body: PoolCreate):
 
 
 @router.put("/pools/{pool_id}")
-def update_pool(pool_id: int, body: PoolUpdate):
+def update_pool(pool_id: int, body: PoolUpdate, request: Request):
     conn = _conn()
     try:
+        _assert_pool_access(conn, request, pool_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -418,9 +583,10 @@ def update_pool(pool_id: int, body: PoolUpdate):
 
 
 @router.delete("/pools/{pool_id}")
-def delete_pool(pool_id: int):
+def delete_pool(pool_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_pool_access(conn, request, pool_id)
         if not db.delete_pool(conn, pool_id):
             _404("Pool")
         return {"ok": True}
@@ -433,18 +599,20 @@ def delete_pool(pool_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/pools/{pool_id}/gl-mappings")
-def list_gl_mappings(pool_id: int):
+def list_gl_mappings(pool_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_pool_access(conn, request, pool_id)
         return db.list_gl_mappings(conn, pool_id)
     finally:
         conn.close()
 
 
 @router.post("/pools/{pool_id}/gl-mappings", status_code=201)
-def create_gl_mapping(pool_id: int, body: GLMappingCreate):
+def create_gl_mapping(pool_id: int, body: GLMappingCreate, request: Request):
     conn = _conn()
     try:
+        _assert_pool_access(conn, request, pool_id)
         conflict = db.check_cost_account_conflict(conn, pool_id, body.account)
         if conflict:
             rg_label = conflict["rate_group"] or "this rate structure"
@@ -464,9 +632,10 @@ def create_gl_mapping(pool_id: int, body: GLMappingCreate):
 
 
 @router.delete("/gl-mappings/{mapping_id}")
-def delete_gl_mapping(mapping_id: int):
+def delete_gl_mapping(mapping_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_gl_mapping_access(conn, request, mapping_id)
         if not db.delete_gl_mapping(conn, mapping_id):
             _404("GL mapping")
         return {"ok": True}
@@ -475,9 +644,10 @@ def delete_gl_mapping(mapping_id: int):
 
 
 @router.get("/fiscal-years/{fy_id}/unassigned-accounts")
-def get_unassigned_accounts(fy_id: int):
+def get_unassigned_accounts(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.get_unassigned_accounts(conn, fy_id)
     finally:
         conn.close()
@@ -488,18 +658,20 @@ def get_unassigned_accounts(fy_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/reference-rates")
-def list_reference_rates(fy_id: int, rate_type: str | None = None):
+def list_reference_rates(fy_id: int, request: Request, rate_type: str | None = None):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_reference_rates(conn, fy_id, rate_type)
     finally:
         conn.close()
 
 
 @router.put("/fiscal-years/{fy_id}/reference-rates")
-def upsert_reference_rate(fy_id: int, body: ReferenceRateUpsert):
+def upsert_reference_rate(fy_id: int, body: ReferenceRateUpsert, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         rid = db.upsert_reference_rate(
             conn, fy_id, body.rate_type, body.pool_group_name, body.period, body.rate_value
         )
@@ -509,9 +681,10 @@ def upsert_reference_rate(fy_id: int, body: ReferenceRateUpsert):
 
 
 @router.put("/fiscal-years/{fy_id}/reference-rates/bulk")
-def bulk_upsert_reference_rates(fy_id: int, body: list[ReferenceRateUpsert]):
+def bulk_upsert_reference_rates(fy_id: int, body: list[ReferenceRateUpsert], request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         ids = []
         for item in body:
             rid = db.upsert_reference_rate(
@@ -528,7 +701,7 @@ _PERIOD_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])$")
 
 
 @router.post("/fiscal-years/{fy_id}/reference-rates/upload", status_code=201)
-async def upload_reference_rates(fy_id: int, file: UploadFile = File(...)):
+async def upload_reference_rates(fy_id: int, request: Request, file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
 
@@ -539,6 +712,7 @@ async def upload_reference_rates(fy_id: int, file: UploadFile = File(...)):
 
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         pgs = db.list_pool_groups(conn, fy_id)
     finally:
         conn.close()
@@ -588,12 +762,10 @@ async def upload_reference_rates(fy_id: int, file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/entities")
-def list_entities(fy_id: int, data_dir: str = "data"):
+def list_entities(fy_id: int, request: Request, data_dir: str = "data"):
     conn = _conn()
     try:
-        fy = db.get_fiscal_year(conn, fy_id)
-        if not fy:
-            _404("Fiscal year")
+        user_id, fy = _assert_fy_access(conn, request, fy_id)
         # Try uploaded GL_Actuals first
         uploaded = db.get_latest_uploaded_file(conn, fy_id, "gl_actuals")
     finally:
@@ -626,18 +798,20 @@ def list_entities(fy_id: int, data_dir: str = "data"):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/forecast-runs")
-def list_forecast_runs(fy_id: int):
+def list_forecast_runs(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_forecast_runs(conn, fy_id)
     finally:
         conn.close()
 
 
 @router.get("/forecast-runs/{run_id}")
-def get_forecast_run(run_id: int):
+def get_forecast_run(run_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_forecast_run_access(conn, request, run_id)
         run = db.get_forecast_run(conn, run_id)
         if not run:
             _404("Forecast run")
@@ -649,10 +823,11 @@ def get_forecast_run(run_id: int):
 
 
 @router.get("/forecast-runs/{run_id}/download")
-def download_forecast_run(run_id: int):
+def download_forecast_run(run_id: int, request: Request):
     from fastapi.responses import Response as FastResponse
     conn = _conn()
     try:
+        _assert_forecast_run_access(conn, request, run_id)
         run = db.get_forecast_run(conn, run_id)
         if not run or not run.get("output_zip"):
             _404("Forecast run")
@@ -666,9 +841,10 @@ def download_forecast_run(run_id: int):
 
 
 @router.delete("/forecast-runs/{run_id}")
-def delete_forecast_run(run_id: int):
+def delete_forecast_run(run_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_forecast_run_access(conn, request, run_id)
         if not db.delete_forecast_run(conn, run_id):
             _404("Forecast run")
         return {"ok": True}
@@ -681,18 +857,20 @@ def delete_forecast_run(run_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/revenue")
-def list_revenue(fy_id: int, project: str | None = None):
+def list_revenue(fy_id: int, request: Request, project: str | None = None):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_revenue(conn, fy_id, project)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years/{fy_id}/revenue", status_code=201)
-def upsert_revenue(fy_id: int, body: RevenueUpsert):
+def upsert_revenue(fy_id: int, body: RevenueUpsert, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         rid = db.upsert_revenue(conn, fy_id, body.period, body.project, body.revenue)
         return {"id": rid, "fiscal_year_id": fy_id, **body.model_dump()}
     finally:
@@ -700,9 +878,10 @@ def upsert_revenue(fy_id: int, body: RevenueUpsert):
 
 
 @router.post("/fiscal-years/{fy_id}/revenue/import", status_code=201)
-def import_revenue(fy_id: int, body: list[RevenueUpsert]):
+def import_revenue(fy_id: int, body: list[RevenueUpsert], request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         ids = []
         for item in body:
             rid = db.upsert_revenue(conn, fy_id, item.period, item.project, item.revenue)
@@ -717,18 +896,20 @@ def import_revenue(fy_id: int, body: list[RevenueUpsert]):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/cost-categories")
-def list_cost_categories(fy_id: int, category_type: str | None = None):
+def list_cost_categories(fy_id: int, request: Request, category_type: str | None = None):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_cost_categories(conn, fy_id, category_type)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years/{fy_id}/cost-categories", status_code=201)
-def create_cost_category(fy_id: int, body: CostCategoryCreate):
+def create_cost_category(fy_id: int, body: CostCategoryCreate, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         cc_id = db.create_cost_category(
             conn, fy_id, body.category_type, body.category_name, body.gl_account, body.is_direct
         )
@@ -738,9 +919,10 @@ def create_cost_category(fy_id: int, body: CostCategoryCreate):
 
 
 @router.put("/cost-categories/{cc_id}")
-def update_cost_category(cc_id: int, body: CostCategoryUpdate):
+def update_cost_category(cc_id: int, body: CostCategoryUpdate, request: Request):
     conn = _conn()
     try:
+        _assert_cost_category_access(conn, request, cc_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -752,9 +934,10 @@ def update_cost_category(cc_id: int, body: CostCategoryUpdate):
 
 
 @router.delete("/cost-categories/{cc_id}")
-def delete_cost_category(cc_id: int):
+def delete_cost_category(cc_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_cost_category_access(conn, request, cc_id)
         if not db.delete_cost_category(conn, cc_id):
             _404("Cost category")
         return {"ok": True}
@@ -767,18 +950,20 @@ def delete_cost_category(cc_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/chart-of-accounts")
-def list_chart_of_accounts(fy_id: int):
+def list_chart_of_accounts(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_chart_of_accounts(conn, fy_id)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years/{fy_id}/chart-of-accounts", status_code=201)
-def create_chart_account(fy_id: int, body: ChartAccountCreate):
+def create_chart_account(fy_id: int, body: ChartAccountCreate, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         ca_id = db.create_chart_account(conn, fy_id, body.account, body.name, body.category)
         return {"id": ca_id, "fiscal_year_id": fy_id, **body.model_dump()}
     finally:
@@ -786,9 +971,10 @@ def create_chart_account(fy_id: int, body: ChartAccountCreate):
 
 
 @router.post("/fiscal-years/{fy_id}/chart-of-accounts/bulk", status_code=201)
-def bulk_create_chart_accounts(fy_id: int, body: ChartAccountBulk):
+def bulk_create_chart_accounts(fy_id: int, body: ChartAccountBulk, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         ids = db.bulk_create_chart_accounts(conn, fy_id, [a.model_dump() for a in body.accounts])
         return {"ids": ids, "imported": len(ids)}
     finally:
@@ -796,9 +982,10 @@ def bulk_create_chart_accounts(fy_id: int, body: ChartAccountBulk):
 
 
 @router.delete("/chart-of-accounts/{ca_id}")
-def delete_chart_account(ca_id: int):
+def delete_chart_account(ca_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_chart_account_access(conn, request, ca_id)
         if not db.delete_chart_account(conn, ca_id):
             _404("Chart account")
         return {"ok": True}
@@ -811,18 +998,20 @@ def delete_chart_account(ca_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/pool-groups/{pg_id}/base-accounts")
-def list_base_accounts(pg_id: int):
+def list_base_accounts(pg_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_pool_group_access(conn, request, pg_id)
         return db.list_base_accounts(conn, pg_id)
     finally:
         conn.close()
 
 
 @router.post("/pool-groups/{pg_id}/base-accounts", status_code=201)
-def create_base_account(pg_id: int, body: BaseAccountCreate):
+def create_base_account(pg_id: int, body: BaseAccountCreate, request: Request):
     conn = _conn()
     try:
+        _assert_pool_group_access(conn, request, pg_id)
         ba_id = db.create_base_account(conn, pg_id, body.account, body.notes)
         return {"id": ba_id, "pool_group_id": pg_id, **body.model_dump()}
     finally:
@@ -830,9 +1019,10 @@ def create_base_account(pg_id: int, body: BaseAccountCreate):
 
 
 @router.delete("/base-accounts/{ba_id}")
-def delete_base_account(ba_id: int):
+def delete_base_account(ba_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_base_account_access(conn, request, ba_id)
         if not db.delete_base_account(conn, ba_id):
             _404("Base account")
         return {"ok": True}
@@ -845,18 +1035,20 @@ def delete_base_account(ba_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/available-cost-accounts")
-def get_available_cost_accounts(fy_id: int):
+def get_available_cost_accounts(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.get_available_cost_accounts(conn, fy_id)
     finally:
         conn.close()
 
 
 @router.get("/fiscal-years/{fy_id}/available-base-accounts")
-def get_available_base_accounts(fy_id: int):
+def get_available_base_accounts(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.get_available_base_accounts(conn, fy_id)
     finally:
         conn.close()
@@ -867,18 +1059,20 @@ def get_available_base_accounts(fy_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/fiscal-years/{fy_id}/scenarios")
-def list_scenarios(fy_id: int):
+def list_scenarios(fy_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         return db.list_scenarios(conn, fy_id)
     finally:
         conn.close()
 
 
 @router.post("/fiscal-years/{fy_id}/scenarios", status_code=201)
-def create_scenario(fy_id: int, body: ScenarioCreate):
+def create_scenario(fy_id: int, body: ScenarioCreate, request: Request):
     conn = _conn()
     try:
+        _assert_fy_access(conn, request, fy_id)
         sid = db.create_scenario(conn, fy_id, body.name, body.description)
         return {"id": sid, "fiscal_year_id": fy_id, **body.model_dump()}
     finally:
@@ -886,9 +1080,10 @@ def create_scenario(fy_id: int, body: ScenarioCreate):
 
 
 @router.get("/scenarios/{scenario_id}")
-def get_scenario(scenario_id: int):
+def get_scenario(scenario_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_scenario_access(conn, request, scenario_id)
         s = db.get_scenario(conn, scenario_id)
         if not s:
             _404("Scenario")
@@ -898,9 +1093,10 @@ def get_scenario(scenario_id: int):
 
 
 @router.put("/scenarios/{scenario_id}")
-def update_scenario(scenario_id: int, body: ScenarioUpdate):
+def update_scenario(scenario_id: int, body: ScenarioUpdate, request: Request):
     conn = _conn()
     try:
+        _assert_scenario_access(conn, request, scenario_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -912,9 +1108,10 @@ def update_scenario(scenario_id: int, body: ScenarioUpdate):
 
 
 @router.delete("/scenarios/{scenario_id}")
-def delete_scenario(scenario_id: int):
+def delete_scenario(scenario_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_scenario_access(conn, request, scenario_id)
         if not db.delete_scenario(conn, scenario_id):
             _404("Scenario")
         return {"ok": True}
@@ -927,19 +1124,21 @@ def delete_scenario(scenario_id: int):
 # ---------------------------------------------------------------------------
 
 @router.get("/scenarios/{scenario_id}/events")
-def list_scenario_events(scenario_id: int):
+def list_scenario_events(scenario_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_scenario_access(conn, request, scenario_id)
         return db.list_scenario_events(conn, scenario_id)
     finally:
         conn.close()
 
 
 @router.post("/scenarios/{scenario_id}/events", status_code=201)
-def create_scenario_event(scenario_id: int, body: ScenarioEventCreate):
+def create_scenario_event(scenario_id: int, body: ScenarioEventCreate, request: Request):
     import json
     conn = _conn()
     try:
+        _assert_scenario_access(conn, request, scenario_id)
         eid = db.create_scenario_event(
             conn, scenario_id,
             body.effective_period, body.event_type, body.project,
@@ -953,9 +1152,10 @@ def create_scenario_event(scenario_id: int, body: ScenarioEventCreate):
 
 
 @router.put("/scenario-events/{event_id}")
-def update_scenario_event(event_id: int, body: ScenarioEventUpdate):
+def update_scenario_event(event_id: int, body: ScenarioEventUpdate, request: Request):
     conn = _conn()
     try:
+        _assert_scenario_event_access(conn, request, event_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -967,9 +1167,10 @@ def update_scenario_event(event_id: int, body: ScenarioEventUpdate):
 
 
 @router.delete("/scenario-events/{event_id}")
-def delete_scenario_event(event_id: int):
+def delete_scenario_event(event_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_scenario_event_access(conn, request, event_id)
         if not db.delete_scenario_event(conn, event_id):
             _404("Scenario event")
         return {"ok": True}
@@ -982,8 +1183,9 @@ def delete_scenario_event(event_id: int):
 # ---------------------------------------------------------------------------
 
 @router.post("/seed-test-data", status_code=201)
-def seed_test_data(data_dir: str = "data_test"):
+def seed_test_data(request: Request, data_dir: str = "data_test"):
     from .seed import seed_test_data as _seed
+    require_auth(request)
     conn = _conn()
     try:
         result = _seed(conn, Path(data_dir))
@@ -995,8 +1197,9 @@ def seed_test_data(data_dir: str = "data_test"):
 
 
 @router.delete("/seed-test-data")
-def clear_test_data(data_dir: str = "data_test"):
+def clear_test_data(request: Request, data_dir: str = "data_test"):
     from .seed import clear_test_data as _clear
+    require_auth(request)
     conn = _conn()
     try:
         return _clear(conn, Path(data_dir))
@@ -1009,11 +1212,12 @@ def clear_test_data(data_dir: str = "data_test"):
 # ---------------------------------------------------------------------------
 
 @router.post("/seed-demo-data", status_code=201)
-def seed_demo_data(data_dir: str = "data_demo"):
+def seed_demo_data(request: Request, data_dir: str = "data_demo"):
     from .demo_data import seed_demo_data as _seed
+    user_id = require_auth(request)
     conn = _conn()
     try:
-        result = _seed(conn, Path(data_dir))
+        result = _seed(conn, Path(data_dir), user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=409, detail=result["error"])
         return result
@@ -1022,11 +1226,12 @@ def seed_demo_data(data_dir: str = "data_demo"):
 
 
 @router.delete("/seed-demo-data")
-def clear_demo_data(data_dir: str = "data_demo"):
+def clear_demo_data(request: Request, data_dir: str = "data_demo"):
     from .demo_data import clear_demo_data as _clear
+    user_id = require_auth(request)
     conn = _conn()
     try:
-        return _clear(conn, Path(data_dir))
+        return _clear(conn, Path(data_dir), user_id=user_id)
     finally:
         conn.close()
 
@@ -1048,7 +1253,7 @@ def get_rates_table(
     from .config import RateConfig, default_rate_config
     from .ytd import compute_ytd_rates, build_rates_comparison_table
 
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         fy = _check_fy_ownership(conn, fy_id, user_id)
@@ -1182,7 +1387,7 @@ def get_psr(
     from .config import RateConfig, default_rate_config
     from .psr import build_psr, build_psr_summary
 
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         fy = _check_fy_ownership(conn, fy_id, user_id)
@@ -1331,7 +1536,7 @@ def get_pst(
     from .config import RateConfig, default_rate_config
     from .pst import build_pst_report
 
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         fy = _check_fy_ownership(conn, fy_id, user_id)
@@ -1456,7 +1661,7 @@ async def upload_file(
     file: UploadFile = File(...),
     file_type: str = "gl_actuals",
 ):
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     content = await file.read()
 
     conn = _conn()
@@ -1464,13 +1669,12 @@ async def upload_file(
         _check_fy_ownership(conn, fy_id, user_id)
 
         # Enforce storage quota for authenticated users
-        if user_id:
-            used = db.get_user_storage_bytes(conn, user_id)
-            if used + len(content) > db.MAX_STORAGE_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Storage limit exceeded. Used: {used // 1024 // 1024}MB of {db.MAX_STORAGE_BYTES // 1024 // 1024}MB",
-                )
+        used = db.get_user_storage_bytes(conn, user_id)
+        if used + len(content) > db.MAX_STORAGE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Storage limit exceeded. Used: {used // 1024 // 1024}MB of {db.MAX_STORAGE_BYTES // 1024 // 1024}MB",
+            )
 
         file_id = db.save_uploaded_file(conn, fy_id, file_type, file.filename or file_type, content)
         return {"id": file_id, "file_type": file_type, "file_name": file.filename, "size_bytes": len(content)}
@@ -1480,7 +1684,7 @@ async def upload_file(
 
 @router.get("/fiscal-years/{fy_id}/files")
 def list_files(fy_id: int, request: Request):
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         _check_fy_ownership(conn, fy_id, user_id)
@@ -1490,10 +1694,11 @@ def list_files(fy_id: int, request: Request):
 
 
 @router.get("/files/{file_id}/download")
-def download_file(file_id: int):
+def download_file(file_id: int, request: Request):
     from fastapi.responses import Response as FastResponse
     conn = _conn()
     try:
+        _assert_uploaded_file_access(conn, request, file_id)
         f = db.get_uploaded_file(conn, file_id)
         if not f:
             _404("File")
@@ -1507,9 +1712,10 @@ def download_file(file_id: int):
 
 
 @router.delete("/files/{file_id}")
-def delete_file(file_id: int):
+def delete_file(file_id: int, request: Request):
     conn = _conn()
     try:
+        _assert_uploaded_file_access(conn, request, file_id)
         if not db.delete_uploaded_file(conn, file_id):
             _404("File")
         return {"ok": True}
@@ -1523,9 +1729,7 @@ def delete_file(file_id: int):
 
 @router.get("/storage-usage")
 def get_storage_usage(request: Request):
-    user_id = get_current_user(request)
-    if not user_id:
-        return {"used_bytes": 0, "max_bytes": db.MAX_STORAGE_BYTES, "used_mb": 0}
+    user_id = require_auth(request)
     conn = _conn()
     try:
         used = db.get_user_storage_bytes(conn, user_id)
@@ -1555,7 +1759,7 @@ def forecast_from_db(
     from .agents import AnalystAgent, PlannerAgent, ReporterAgent
     from .config import RateConfig
 
-    user_id = get_current_user(request)
+    user_id = require_auth(request)
     conn = _conn()
     try:
         fy = _check_fy_ownership(conn, fy_id, user_id)

@@ -18,6 +18,7 @@ import type {
   GLMapping,
   BaseAccount,
 } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 function FYSelector({
   selected,
@@ -378,6 +379,12 @@ export default function CostStructurePage() {
       <p className="text-muted-foreground text-sm mb-4">
         View indirect rate allocation formulas and cost structure for the selected fiscal year and rate group.
       </p>
+      <NextStepHint
+        items={[
+          { label: "Adjust pool setup", href: "/pools", detail: "Update pool/base assignments if formulas look off." },
+          { label: "Validate with rates", href: "/rates", detail: "Compute rates and confirm expected trends." },
+        ]}
+      />
 
       {/* FY + Rate Group selectors */}
       <div className="flex items-center gap-6 mb-4 flex-wrap">

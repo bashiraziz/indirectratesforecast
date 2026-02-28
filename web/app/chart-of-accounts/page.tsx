@@ -10,6 +10,7 @@ import {
   deleteChartAccount,
 } from "@/lib/api";
 import type { FiscalYear, ChartAccount } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 function Dialog({
   open,
@@ -177,6 +178,12 @@ export default function ChartOfAccountsPage() {
       <p className="text-muted-foreground text-sm mb-4">
         Master GL account list for this fiscal year. These accounts are available for assignment to pools.
       </p>
+      <NextStepHint
+        items={[
+          { label: "Assign accounts to pools", href: "/pools", detail: "Map COA accounts into pool structures." },
+          { label: "Review cost categories", href: "/mappings", detail: "Group accounts into Labor/ODC/Subk/etc." },
+        ]}
+      />
 
       <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
 

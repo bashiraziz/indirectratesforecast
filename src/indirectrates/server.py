@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import tempfile
+import time
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -10,9 +13,10 @@ from typing import Optional
 import yaml
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from fastapi.responses import JSONResponse, Response
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
@@ -44,10 +48,123 @@ def _rate_key(request: Request) -> str:
 
 
 limiter = Limiter(key_func=_rate_key)
+logger = logging.getLogger("indirectrates.api")
 
 app = FastAPI(title="Indirect Rates Forecast API", version="0.3.0")
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def _request_id_from_request(request: Request) -> str:
+    return getattr(request.state, "request_id", "") or request.headers.get("X-Request-ID", "")
+
+
+def _http_error_code(status_code: int) -> str:
+    return {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        409: "conflict",
+        413: "payload_too_large",
+        422: "validation_error",
+        429: "rate_limited",
+        500: "internal_error",
+        503: "service_unavailable",
+    }.get(status_code, "http_error")
+
+
+def _error_response(
+    request: Request,
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+    detail: object,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "detail": detail,
+            "error": {
+                "code": code,
+                "message": message,
+                "request_id": _request_id_from_request(request),
+            },
+        },
+    )
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_exception_handler(request: Request, _: RateLimitExceeded) -> JSONResponse:
+    return _error_response(
+        request,
+        status_code=429,
+        code="rate_limited",
+        message="Rate limit exceeded",
+        detail="Rate limit exceeded",
+    )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        message = str(detail.get("message") or detail.get("detail") or "Request failed")
+    else:
+        message = str(detail)
+    return _error_response(
+        request,
+        status_code=exc.status_code,
+        code=_http_error_code(exc.status_code),
+        message=message,
+        detail=detail,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return _error_response(
+        request,
+        status_code=422,
+        code="validation_error",
+        message="Request validation failed",
+        detail=exc.errors(),
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled server exception rid=%s method=%s path=%s",
+        _request_id_from_request(request),
+        request.method,
+        request.url.path,
+    )
+    return _error_response(
+        request,
+        status_code=500,
+        code="internal_error",
+        message="Internal server error",
+        detail="Internal server error",
+    )
+
+
+@app.middleware("http")
+async def _request_context_middleware(request: Request, call_next):
+    request.state.request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    response.headers["X-Request-ID"] = request.state.request_id
+    logger.info(
+        "%s %s -> %s in %.2fms rid=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+        request.state.request_id,
+    )
+    return response
 
 
 @app.on_event("startup")
@@ -55,9 +172,10 @@ def startup():
     """Initialize database tables on startup."""
     try:
         init_db()
-    except Exception as e:
-        import warnings
-        warnings.warn(f"DB init failed (is PostgreSQL running?): {e}")
+    except Exception:
+        logger.exception(
+            "DB init failed during startup; DB-backed endpoints may fail until database is reachable"
+        )
 
 
 # ALLOWED_ORIGINS: comma-separated list of allowed origins.
@@ -86,6 +204,19 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz():
+    conn = None
+    try:
+        conn = get_connection()
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc.__class__.__name__}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +259,8 @@ async def forecast(
     # When fiscal_year_id is provided, load config from DB instead of uploads
     fy = None
     if fiscal_year_id is not None:
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required for fiscal_year_id mode")
         conn = get_connection()
         try:
             fy = get_fiscal_year(conn, fiscal_year_id, user_id=user_id)
@@ -154,8 +287,11 @@ async def forecast(
 
         if inputs_zip is not None:
             data = await inputs_zip.read()
-            with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
-                zf.extractall(input_dir)
+            try:
+                with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+                    zf.extractall(input_dir)
+            except zipfile.BadZipFile as exc:
+                raise HTTPException(status_code=400, detail="inputs_zip is not a valid ZIP archive") from exc
         else:
             # GL_Actuals: DB upload > fresh upload > disk
             if gl_actuals is not None:
@@ -321,5 +457,20 @@ def _zip_dir_bytes(src_dir: Path) -> bytes:
 async def _load_config(config_yaml: Optional[UploadFile]) -> RateConfig:
     if config_yaml is None:
         return default_rate_config()
-    raw = yaml.safe_load((await config_yaml.read()).decode("utf-8"))
-    return RateConfig.from_mapping(raw)
+    try:
+        raw_text = (await config_yaml.read()).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="config_yaml must be UTF-8 text") from exc
+
+    try:
+        raw = yaml.safe_load(raw_text) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail="config_yaml is invalid YAML") from exc
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="config_yaml must define a YAML mapping/object at top level")
+
+    try:
+        return RateConfig.from_mapping(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid config_yaml content: {exc}") from exc

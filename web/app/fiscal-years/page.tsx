@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import { listFiscalYears, createFiscalYear, deleteFiscalYear } from "@/lib/api";
 import type { FiscalYear } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 function Dialog({
   open,
@@ -92,6 +93,12 @@ export default function FiscalYearsPage() {
       <p className="text-muted-foreground text-sm mb-4">
         Manage fiscal year definitions used across pool setup, forecasting, and reporting.
       </p>
+      <NextStepHint
+        items={[
+          { label: "Load chart of accounts", href: "/chart-of-accounts", detail: "Add GL accounts for this fiscal year." },
+          { label: "Configure pools", href: "/pools", detail: "Set up rate groups, pool groups, and mappings." },
+        ]}
+      />
 
       {error && (
         <div className="mb-4 px-4 py-3 rounded-lg border border-destructive/30 bg-destructive/10 text-destructive text-sm">

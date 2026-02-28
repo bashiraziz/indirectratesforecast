@@ -17,6 +17,7 @@ import {
   deleteCostCategory,
 } from "@/lib/api";
 import type { FiscalYear, CostCategory } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -396,6 +397,12 @@ export default function MappingsPage() {
         Define cost categories for Labor, ODC, Subcontractor, Travel, and other cost types.
         Map GL accounts and mark each as direct or indirect.
       </p>
+      <NextStepHint
+        items={[
+          { label: "Review pool account assignments", href: "/pools", detail: "Confirm mapped accounts appear in correct pools." },
+          { label: "Run rates comparison", href: "/rates", detail: "Check actual vs budget/provisional outputs." },
+        ]}
+      />
 
       <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
 
