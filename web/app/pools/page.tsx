@@ -8,7 +8,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Loader2,
   Plus,
+  Sparkles,
   Trash2,
   Pencil,
   X,
@@ -41,6 +43,14 @@ import {
 } from "@/lib/api";
 import type { FiscalYear, RateGroup, PoolGroup, Pool, GLMapping, ChartAccount, BaseAccount } from "@/lib/types";
 import NextStepHint from "@/app/components/NextStepHint";
+
+interface AISuggestion {
+  account: string;
+  suggested_pool_id: number;
+  suggested_pool_name: string;
+  is_unallowable: boolean;
+  reason: string;
+}
 
 // ---------------------------------------------------------------------------
 // Small dialog component
@@ -183,6 +193,7 @@ function AccountShuttle({
   onAssign,
   onUnassign,
   error,
+  headerActions,
 }: {
   title: string;
   available: ChartAccount[];
@@ -190,6 +201,7 @@ function AccountShuttle({
   onAssign: (accounts: ChartAccount[]) => Promise<void>;
   onUnassign: (ids: number[]) => Promise<void>;
   error?: string | null;
+  headerActions?: React.ReactNode;
 }) {
   const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
   const [selectedAssigned, setSelectedAssigned] = useState<Set<number>>(new Set());
@@ -246,8 +258,9 @@ function AccountShuttle({
 
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
-        {title}
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5 flex items-center justify-between">
+        <span>{title}</span>
+        {headerActions}
       </div>
       <div className="grid grid-cols-[1fr_auto_1fr] gap-1.5">
         {/* Available list */}
@@ -370,8 +383,17 @@ function PoolGroupItem({
   // --- Pending local changes (not yet saved) ---
   const [pendingCostAdds, setPendingCostAdds] = useState<ChartAccount[]>([]);
   const [pendingCostRemoves, setPendingCostRemoves] = useState<Set<number>>(new Set());
+  const [pendingCostUnallowable, setPendingCostUnallowable] = useState<Set<string>>(new Set());
   const [pendingBaseAdds, setPendingBaseAdds] = useState<ChartAccount[]>([]);
   const [pendingBaseRemoves, setPendingBaseRemoves] = useState<Set<number>>(new Set());
+
+  // --- AI Suggest state ---
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<AISuggestion[] | null>(null);
+  const [acceptedSuggestions, setAcceptedSuggestions] = useState<Set<string>>(new Set());
+  const [showSuggestDialog, setShowSuggestDialog] = useState(false);
+  const [aiToast, setAiToast] = useState<string | null>(null);
 
   const [showAddPool, setShowAddPool] = useState(false);
   const [newPoolName, setNewPoolName] = useState("");
@@ -391,6 +413,7 @@ function PoolGroupItem({
   function clearPending() {
     setPendingCostAdds([]);
     setPendingCostRemoves(new Set());
+    setPendingCostUnallowable(new Set());
     setPendingBaseAdds([]);
     setPendingBaseRemoves(new Set());
     setCostError(null);
@@ -530,7 +553,10 @@ function PoolGroupItem({
       // Add cost mappings
       for (const acct of pendingCostAdds) {
         try {
-          await createGLMapping(targetPoolId, { account: acct.account });
+          await createGLMapping(targetPoolId, {
+            account: acct.account,
+            is_unallowable: pendingCostUnallowable.has(acct.account),
+          });
         } catch (err: any) {
           let msg = err.message || "Failed to assign account";
           try {
@@ -565,6 +591,84 @@ function PoolGroupItem({
 
   function handleCancel() {
     clearPending();
+  }
+
+  async function handleAISuggest() {
+    if (availableCost.length === 0) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const allPGs = await listPoolGroups(fyId);
+      const poolsData = allPGs.map((p) => ({
+        id: p.id,
+        name: p.name,
+        base: p.base,
+        cascade_order: p.cascade_order ?? 0,
+      }));
+      const accountsData = availableCost.map((a) => ({
+        account: a.account,
+        name: a.name || "",
+        category: a.category || "",
+      }));
+
+      const resp = await fetch("/api/suggest-mapping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounts: accountsData, pools: poolsData }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      const data: AISuggestion[] = await resp.json();
+
+      // Show ALL unmapped accounts — don't filter by pool group.
+      // Pre-check only the ones AI recommends for this pool or flags as unallowable.
+      // Accounts suggested for other pools appear un-checked with a "→ Pool" label
+      // so the user can see where they belong and choose accordingly.
+      setAiSuggestions(data);
+      const defaultAccepted = new Set(
+        data
+          .filter((s) => s.suggested_pool_id === pg.id || s.is_unallowable)
+          .map((s) => s.account)
+      );
+      setAcceptedSuggestions(defaultAccepted);
+      setShowSuggestDialog(true);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "AI suggestion failed");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  function handleApplySuggestions() {
+    const toApply = (aiSuggestions || []).filter((s) => acceptedSuggestions.has(s.account));
+    const existingAccounts = new Set(pendingCostAdds.map((a) => a.account));
+
+    const newAdds: ChartAccount[] = [];
+    const newUnallowable = new Set(pendingCostUnallowable);
+
+    for (const s of toApply) {
+      if (existingAccounts.has(s.account)) continue;
+      const acct = availableCost.find((a) => a.account === s.account);
+      if (!acct) continue;
+      newAdds.push(acct);
+      if (s.is_unallowable) newUnallowable.add(s.account);
+    }
+
+    if (newAdds.length > 0) {
+      setPendingCostAdds((prev) => [...prev, ...newAdds]);
+      setPendingCostUnallowable(newUnallowable);
+    }
+
+    setShowSuggestDialog(false);
+    setAiSuggestions(null);
+
+    const count = toApply.length;
+    if (count > 0) {
+      setAiToast(`${count} account${count === 1 ? "" : "s"} added. Review and Save.`);
+      setTimeout(() => setAiToast(null), 4000);
+    }
   }
 
   const BASE_OPTIONS = ["DL", "TL", "TCI", "DLH"];
@@ -711,6 +815,21 @@ function PoolGroupItem({
               onAssign={async (accts) => handleAssignCost(accts)}
               onUnassign={async (ids) => handleUnassignCost(ids)}
               error={costError}
+              headerActions={
+                availableCost.length > 0 ? (
+                  <button
+                    onClick={handleAISuggest}
+                    disabled={aiLoading}
+                    className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 border-none! disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Use AI to suggest account mappings for this pool"
+                  >
+                    {aiLoading
+                      ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                      : <Sparkles className="w-2.5 h-2.5" />}
+                    {aiLoading ? "On it…" : "AI Suggest"}
+                  </button>
+                ) : undefined
+              }
             />
             <AccountShuttle
               title="Base Accounts (Denominator)"
@@ -720,6 +839,32 @@ function PoolGroupItem({
               onUnassign={async (ids) => handleUnassignBase(ids)}
             />
           </div>
+
+          {/* AI loading strip */}
+          {aiLoading && (
+            <div className="flex items-center gap-2 text-[11px] text-primary px-2.5 py-1.5 rounded-md bg-primary/8 border border-primary/20 -mt-2">
+              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+              On it — classifying your accounts…
+            </div>
+          )}
+
+          {/* AI error */}
+          {aiError && (
+            <div className="mt-2 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-md px-2.5 py-1.5 flex items-center justify-between">
+              <span>{aiError}</span>
+              <button onClick={() => setAiError(null)} className="bg-transparent! border-none! p-0 text-red-500 hover:text-red-700 ml-2">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
+          {/* AI toast */}
+          {aiToast && (
+            <div className="mt-2 text-[11px] text-green-700 bg-green-50 border border-green-200 rounded-md px-2.5 py-1.5 flex items-center gap-1.5">
+              <Check className="w-3 h-3 shrink-0" />
+              {aiToast}
+            </div>
+          )}
 
           {/* Overlap warning */}
           {overlapAccounts.length > 0 && (
@@ -797,6 +942,126 @@ function PoolGroupItem({
           <button onClick={handleUpdateGroup} className="mt-2">Save</button>
         </div>
       </Dialog>
+
+      {/* AI Suggestions Dialog */}
+      {showSuggestDialog && aiSuggestions !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowSuggestDialog(false)}>
+          <div
+            className="bg-sidebar border border-border rounded-lg p-5 w-full max-w-xl mx-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold m-0 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-primary" />
+                AI Account Suggestions — {pg.name}
+              </h3>
+              <button onClick={() => setShowSuggestDialog(false)} className="p-1 rounded hover:bg-accent bg-transparent! border-none!">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {(() => {
+              const forThisPool = aiSuggestions.filter(
+                (s) => s.suggested_pool_id === pg.id || s.is_unallowable
+              ).length;
+              const forOtherPool = aiSuggestions.length - forThisPool;
+              if (aiSuggestions.length === 0) {
+                return <p className="text-[11px] text-muted-foreground mb-3">No unmapped accounts found.</p>;
+              }
+              return (
+                <p className="text-[11px] text-muted-foreground mb-3">
+                  {forThisPool > 0 && (
+                    <><span className="text-green-600 font-medium">{forThisPool} account{forThisPool === 1 ? "" : "s"} recommended for {pg.name}</span> (pre-checked){forOtherPool > 0 ? " · " : "."}</>
+                  )}
+                  {forOtherPool > 0 && (
+                    <>{forThisPool === 0 ? "No accounts recommended for this pool. " : ""}<span className="text-muted-foreground">{forOtherPool} suggested for other pools</span> — shown for reference, unchecked.</>
+                  )}
+                </p>
+              );
+            })()}
+            {aiSuggestions.length > 0 && (
+              <>
+                <div className="border border-border rounded-md overflow-hidden mb-3">
+                  <div className="grid grid-cols-[auto_1fr_1fr_1fr] text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-1.5 bg-accent/40 border-b border-border">
+                    <span className="w-5" />
+                    <span>Account</span>
+                    <span>AI Suggestion</span>
+                    <span>Reason</span>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    {aiSuggestions.map((s) => {
+                      const isThisPool = s.suggested_pool_id === pg.id;
+                      const isOtherPool = !isThisPool && !s.is_unallowable && s.suggested_pool_id !== -1;
+                      return (
+                        <div
+                          key={s.account}
+                          className={`grid grid-cols-[auto_1fr_1fr_1fr] items-center gap-2 px-3 py-1.5 text-xs border-b border-border/50 last:border-b-0 hover:bg-accent/20 ${isOtherPool ? "opacity-60" : ""}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={acceptedSuggestions.has(s.account)}
+                            onChange={(e) => {
+                              setAcceptedSuggestions((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(s.account);
+                                else next.delete(s.account);
+                                return next;
+                              });
+                            }}
+                            className="w-3.5 h-3.5"
+                          />
+                          <span className="font-mono truncate">{s.account}</span>
+                          <span className="truncate">
+                            {s.is_unallowable ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                                Unallowable
+                              </span>
+                            ) : isThisPool ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-200">
+                                {pg.name} ✓
+                              </span>
+                            ) : s.suggested_pool_id === -1 ? (
+                              <span className="text-[10px] text-muted-foreground">No match</span>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground">→ {s.suggested_pool_name}</span>
+                            )}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground truncate" title={s.reason}>{s.reason}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => setAcceptedSuggestions(new Set(aiSuggestions.map((s) => s.account)))}
+                    className="text-xs bg-transparent! border border-border px-2 py-1"
+                  >
+                    Select all
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setShowSuggestDialog(false)} className="text-xs bg-transparent! border border-border px-3 py-1.5">
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleApplySuggestions}
+                      disabled={acceptedSuggestions.size === 0}
+                      className="text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Check className="w-3 h-3" />
+                      Apply to {pg.name} {acceptedSuggestions.size > 0 ? `(${acceptedSuggestions.size})` : ""}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+            {aiSuggestions.length === 0 && (
+              <button onClick={() => setShowSuggestDialog(false)} className="w-full text-xs">
+                Close
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -216,7 +216,8 @@ CREATE TABLE IF NOT EXISTS forecast_runs (
     run_rate_months INTEGER NOT NULL,
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     assumptions_json TEXT   NOT NULL DEFAULT '{}',
-    output_zip      BYTEA
+    output_zip      BYTEA,
+    trigger         TEXT    NOT NULL DEFAULT 'manual'
 );
 
 CREATE TABLE IF NOT EXISTS uploaded_files (
@@ -264,6 +265,10 @@ def init_db() -> None:
     try:
         with conn.cursor() as cur:
             cur.execute(_SCHEMA)
+            # Migrate existing databases: add trigger column if missing
+            cur.execute(
+                "ALTER TABLE forecast_runs ADD COLUMN IF NOT EXISTS trigger TEXT NOT NULL DEFAULT 'manual'"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -1416,15 +1421,16 @@ def save_forecast_run(
     run_rate_months: int,
     assumptions_json: str,
     output_zip: bytes,
+    trigger: str = "manual",
 ) -> int:
     with transaction(conn):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO forecast_runs (fiscal_year_id, scenario, forecast_months, run_rate_months, assumptions_json, output_zip)
-                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                INSERT INTO forecast_runs (fiscal_year_id, scenario, forecast_months, run_rate_months, assumptions_json, output_zip, trigger)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
-                (fiscal_year_id, scenario, forecast_months, run_rate_months, assumptions_json, psycopg2.Binary(output_zip)),
+                (fiscal_year_id, scenario, forecast_months, run_rate_months, assumptions_json, psycopg2.Binary(output_zip), trigger),
             )
             return cur.fetchone()["id"]
 
@@ -1436,7 +1442,8 @@ def list_forecast_runs(
         cur.execute(
             """
             SELECT id, fiscal_year_id, scenario, forecast_months, run_rate_months,
-                   created_at, assumptions_json, octet_length(output_zip) as zip_size
+                   created_at, assumptions_json, octet_length(output_zip) as zip_size,
+                   trigger
             FROM forecast_runs
             WHERE fiscal_year_id = %s
             ORDER BY created_at DESC

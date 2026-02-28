@@ -10,7 +10,7 @@ import io
 import os
 import re
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from . import db
@@ -208,6 +208,13 @@ def _assert_uploaded_file_access(conn, request: Request, file_id: int) -> int:
     )
     _assert_fy_access(conn, request, fy_id)
     return fy_id
+
+
+def _maybe_auto_forecast(background_tasks: BackgroundTasks, user_id: str | None, fy_id: int | None) -> None:
+    """Queue a background DB-mode forecast if user_id and fy_id are present."""
+    if user_id and fy_id:
+        from .server import _run_db_forecast
+        background_tasks.add_task(_run_db_forecast, user_id, fy_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1115,12 +1122,13 @@ def list_scenarios(fy_id: int, request: Request):
 
 
 @router.post("/fiscal-years/{fy_id}/scenarios", status_code=201)
-def create_scenario(fy_id: int, body: ScenarioCreate, request: Request):
+def create_scenario(fy_id: int, body: ScenarioCreate, request: Request, background_tasks: BackgroundTasks):
     conn = _conn()
     try:
-        _assert_fy_access(conn, request, fy_id)
+        user_id, _ = _assert_fy_access(conn, request, fy_id)
         sid = db.create_scenario(conn, fy_id, body.name, body.description)
-        return {"id": sid, "fiscal_year_id": fy_id, **body.model_dump()}
+        _maybe_auto_forecast(background_tasks, user_id, fy_id)
+        return {"id": sid, "fiscal_year_id": fy_id, **body.model_dump(), "forecast_triggered": True}
     finally:
         conn.close()
 
@@ -1139,28 +1147,32 @@ def get_scenario(scenario_id: int, request: Request):
 
 
 @router.put("/scenarios/{scenario_id}")
-def update_scenario(scenario_id: int, body: ScenarioUpdate, request: Request):
+def update_scenario(scenario_id: int, body: ScenarioUpdate, request: Request, background_tasks: BackgroundTasks):
     conn = _conn()
     try:
-        _assert_scenario_access(conn, request, scenario_id)
+        user_id = get_current_user(request)
+        fy_id = _assert_scenario_access(conn, request, scenario_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
         if not db.update_scenario(conn, scenario_id, **updates):
             _404("Scenario")
-        return {"ok": True}
+        _maybe_auto_forecast(background_tasks, user_id, fy_id)
+        return {"ok": True, "forecast_triggered": True}
     finally:
         conn.close()
 
 
 @router.delete("/scenarios/{scenario_id}")
-def delete_scenario(scenario_id: int, request: Request):
+def delete_scenario(scenario_id: int, request: Request, background_tasks: BackgroundTasks):
     conn = _conn()
     try:
-        _assert_scenario_access(conn, request, scenario_id)
+        user_id = get_current_user(request)
+        fy_id = _assert_scenario_access(conn, request, scenario_id)
         if not db.delete_scenario(conn, scenario_id):
             _404("Scenario")
-        return {"ok": True}
+        _maybe_auto_forecast(background_tasks, user_id, fy_id)
+        return {"ok": True, "forecast_triggered": True}
     finally:
         conn.close()
 
@@ -1704,6 +1716,7 @@ def get_pst(
 async def upload_file(
     fy_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     file_type: str = "gl_actuals",
 ):
@@ -1723,7 +1736,8 @@ async def upload_file(
             )
 
         file_id = db.save_uploaded_file(conn, fy_id, file_type, file.filename or file_type, content)
-        return {"id": file_id, "file_type": file_type, "file_name": file.filename, "size_bytes": len(content)}
+        _maybe_auto_forecast(background_tasks, user_id, fy_id)
+        return {"id": file_id, "file_type": file_type, "file_name": file.filename, "size_bytes": len(content), "forecast_triggered": True}
     finally:
         conn.close()
 
@@ -1916,7 +1930,7 @@ def create_gl_entry(fy_id: int, body: GLEntryCreate, request: Request):
 
 
 @router.post("/fiscal-years/{fy_id}/gl-entries/import")
-async def import_gl_entries(fy_id: int, request: Request, file: UploadFile = File(...)):
+async def import_gl_entries(fy_id: int, request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     user_id = require_auth(request)
     content = await file.read()
     try:
@@ -1956,7 +1970,8 @@ async def import_gl_entries(fy_id: int, request: Request, file: UploadFile = Fil
         finally:
             conn.close()
 
-    return {"imported": imported, "errors": errors}
+    _maybe_auto_forecast(background_tasks, user_id, fy_id)
+    return {"imported": imported, "errors": errors, "forecast_triggered": True}
 
 
 @router.get("/fiscal-years/{fy_id}/gl-entries/export")
@@ -1977,7 +1992,7 @@ def export_gl_entries(fy_id: int, request: Request):
 
 
 @router.delete("/fiscal-years/{fy_id}/gl-entries")
-def delete_all_gl_entries(fy_id: int, request: Request, confirm: bool = False):
+def delete_all_gl_entries(fy_id: int, request: Request, background_tasks: BackgroundTasks, confirm: bool = False):
     if not confirm:
         raise HTTPException(status_code=400, detail="Pass confirm=true to delete all GL entries for this fiscal year")
     user_id = require_auth(request)
@@ -1985,7 +2000,8 @@ def delete_all_gl_entries(fy_id: int, request: Request, confirm: bool = False):
     try:
         _check_fy_ownership(conn, fy_id, user_id)
         deleted = db.delete_gl_entries_for_fy(conn, user_id, fy_id)
-        return {"deleted": deleted}
+        _maybe_auto_forecast(background_tasks, user_id, fy_id)
+        return {"deleted": deleted, "forecast_triggered": True}
     finally:
         conn.close()
 

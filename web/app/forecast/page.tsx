@@ -2133,6 +2133,7 @@ export default function ForecastPage() {
                   <tr className="border-b border-border bg-accent/30">
                     <th className="px-3 py-2 text-left font-medium">Date</th>
                     <th className="px-3 py-2 text-left font-medium">Scenario</th>
+                    <th className="px-3 py-2 text-left font-medium">Origin</th>
                     <th className="px-3 py-2 text-right font-medium">Months</th>
                     <th className="px-3 py-2 text-right font-medium">Run-rate</th>
                     <th className="px-3 py-2 text-right font-medium">Size</th>
@@ -2144,6 +2145,15 @@ export default function ForecastPage() {
                     <tr key={run.id} className="border-b border-border/50">
                       <td className="px-3 py-2">{new Date(run.created_at + "Z").toLocaleString()}</td>
                       <td className="px-3 py-2">{run.scenario || "(all)"}</td>
+                      <td className="px-3 py-2">
+                        {run.trigger === "auto" ? (
+                          <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: "rgba(99,102,241,0.15)", color: "rgb(99,102,241)", fontWeight: 600, letterSpacing: "0.03em" }}>
+                            Auto
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, color: "var(--color-muted-foreground)" }}>Manual</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right font-mono">{run.forecast_months}</td>
                       <td className="px-3 py-2 text-right font-mono">{run.run_rate_months}</td>
                       <td className="px-3 py-2 text-right font-mono">{run.zip_size ? (run.zip_size / 1024).toFixed(0) + " KB" : "—"}</td>

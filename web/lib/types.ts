@@ -110,6 +110,7 @@ export interface ForecastRun {
   run_rate_months: number;
   created_at: string;
   zip_size: number;
+  trigger: string;
 }
 
 export interface FYSummary {

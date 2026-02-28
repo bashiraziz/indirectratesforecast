@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
-import { listFiscalYears, createFiscalYear, deleteFiscalYear } from "@/lib/api";
+import { Check, Plus, Trash2, X } from "lucide-react";
+import { listFiscalYears, createFiscalYear, deleteFiscalYear, copyFYSetup } from "@/lib/api";
 import type { FiscalYear } from "@/lib/types";
 import NextStepHint from "@/app/components/NextStepHint";
 
@@ -46,6 +46,9 @@ export default function FiscalYearsPage() {
   const [newName, setNewName] = useState("");
   const [newStart, setNewStart] = useState("2024-10");
   const [newEnd, setNewEnd] = useState("2025-09");
+  const [copyEnabled, setCopyEnabled] = useState(true);
+  const [copySourceId, setCopySourceId] = useState<number | "">("");
+  const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -62,15 +65,41 @@ export default function FiscalYearsPage() {
     load();
   }, [load]);
 
+  // When dialog opens, pre-select the most recently created FY as copy source
+  useEffect(() => {
+    if (showCreate && fiscalYears.length > 0) {
+      setCopySourceId(fiscalYears[0].id);
+      setCopyEnabled(true);
+    }
+  }, [showCreate, fiscalYears]);
+
+  // Auto-dismiss toast after 5s
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   async function handleCreate() {
     if (!newName.trim()) return;
-    await createFiscalYear({
+    const newFY = await createFiscalYear({
       name: newName.trim(),
       start_month: newStart,
       end_month: newEnd,
     });
     setShowCreate(false);
     setNewName("");
+    if (copyEnabled && copySourceId) {
+      try {
+        const result = await copyFYSetup(newFY.id, Number(copySourceId));
+        const sourceName = fiscalYears.find((fy) => fy.id === Number(copySourceId))?.name ?? String(copySourceId);
+        setToast(`Created ${newFY.name}. Copied ${result.pool_groups} pool groups + ${result.gl_mappings} mappings from ${sourceName}.`);
+      } catch {
+        setToast(`Created ${newFY.name}. (Copy failed — configure pools manually.)`);
+      }
+    } else {
+      setToast(`Created ${newFY.name}.`);
+    }
     await load();
   }
 
@@ -171,11 +200,54 @@ export default function FiscalYearsPage() {
               <input className="w-full mt-1" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} />
             </div>
           </div>
+          {fiscalYears.length > 0 && (
+            <div className="border border-border rounded-md p-3 bg-accent/20">
+              <div className="flex items-center gap-2 mb-2">
+                <input
+                  type="checkbox"
+                  id="copy-config"
+                  checked={copyEnabled}
+                  onChange={(e) => setCopyEnabled(e.target.checked)}
+                  className="w-3.5 h-3.5"
+                />
+                <label htmlFor="copy-config" className="text-xs font-medium cursor-pointer">
+                  Copy configuration from existing FY
+                </label>
+              </div>
+              {copyEnabled && (
+                <select
+                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                  value={copySourceId}
+                  onChange={(e) => setCopySourceId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  {fiscalYears.map((fy) => (
+                    <option key={fy.id} value={fy.id}>
+                      {fy.name} ({fy.start_month} — {fy.end_month})
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="text-[10px] text-muted-foreground mt-1.5 mb-0">
+                Clones pool groups, GL mappings, and chart accounts.
+              </p>
+            </div>
+          )}
           <button onClick={handleCreate} className="mt-2">
             Create
           </button>
         </div>
       </Dialog>
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-sidebar border border-border rounded-lg px-4 py-2.5 text-sm shadow-lg flex items-center gap-3 min-w-72 max-w-lg">
+          <Check className="w-4 h-4 text-green-500 shrink-0" />
+          <span className="flex-1">{toast}</span>
+          <button onClick={() => setToast(null)} className="bg-transparent! border-none! p-0 text-muted-foreground hover:text-foreground">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

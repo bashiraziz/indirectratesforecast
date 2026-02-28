@@ -98,3 +98,14 @@ All CSVs use monthly `Period` as `YYYY-MM`:
 - **Auditability is non-negotiable**: every rate is `pool/base` by period, scenario deltas are explicit and reproducible, assumptions are logged
 - Agent specs in `specs/agents/` and skill specs in `specs/skills/` are designed to be prompt sources for future Claude orchestration
 - Python 3.10+ required; Windows (PowerShell) is the primary development environment
+
+## User Guide Maintenance
+
+`USER_GUIDE.md` is the end-user reference for the web application. **When adding, changing, or removing any user-facing feature, update `USER_GUIDE.md`**:
+
+- Add a new section (or subsection) describing the feature, where to find it, and step-by-step instructions
+- Update the **Feature Inventory** table at the top of the file
+- Update any affected **Tips & Troubleshooting** entries
+- Keep steps in the **Recommended Workflow** section accurate
+
+The guide covers: Fiscal Years, Chart of Accounts, Pool Setup (including AI Suggest), Data import, Scenarios, Forecast (including auto-run and History), PST/PSR reports.

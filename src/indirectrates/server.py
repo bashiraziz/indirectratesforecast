@@ -475,6 +475,166 @@ async def forecast(
         )
 
 
+def _run_db_forecast(
+    user_id: str,
+    fy_id: int,
+    scenario: str = "Base",
+    forecast_months: int = 12,
+    run_rate_months: int = 3,
+    trigger: str = "auto",
+) -> int | None:
+    """Run forecast from DB sources and persist to forecast_runs. Returns run_id or None on failure."""
+    import json as _json
+    import tempfile
+    import pandas as pd
+    from dataclasses import replace as _replace
+    from . import db as _db
+    from .config import RateConfig
+
+    try:
+        conn = get_connection()
+        try:
+            fy = _db.get_fiscal_year(conn, fy_id, user_id=user_id)
+            if not fy:
+                return None
+            raw_cfg = _db.build_rate_config_from_db(conn, fy_id)
+            cfg = RateConfig.from_mapping(raw_cfg)
+            account_map_df = _db.build_account_map_df_from_db(conn, fy_id)
+            if account_map_df.empty:
+                account_map_df = None
+        finally:
+            conn.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_dir = tmp_path / "inputs"
+            out_dir = tmp_path / "out"
+            input_dir.mkdir(parents=True, exist_ok=True)
+
+            # GL_Actuals: gl_entries table → uploaded_files fallback
+            conn = get_connection()
+            try:
+                csv_str = _db.get_gl_entries_as_csv(conn, user_id, fy_id)
+            finally:
+                conn.close()
+            if csv_str.strip():
+                (input_dir / "GL_Actuals.csv").write_text(csv_str, encoding="utf-8")
+            else:
+                conn = get_connection()
+                try:
+                    uf = _db.get_latest_uploaded_file(conn, fy_id, "gl_actuals")
+                finally:
+                    conn.close()
+                if uf:
+                    (input_dir / "GL_Actuals.csv").write_bytes(uf["content"])
+
+            # Account_Map: DB-generated → uploaded_files fallback
+            if account_map_df is not None:
+                account_map_df.to_csv(input_dir / "Account_Map.csv", index=False)
+            else:
+                conn = get_connection()
+                try:
+                    uf = _db.get_latest_uploaded_file(conn, fy_id, "account_map")
+                finally:
+                    conn.close()
+                if uf:
+                    (input_dir / "Account_Map.csv").write_bytes(uf["content"])
+
+            # Direct_Costs: direct_cost_entries table → uploaded_files fallback
+            conn = get_connection()
+            try:
+                dc_csv = _db.get_direct_cost_entries_as_csv(conn, user_id, fy_id)
+            finally:
+                conn.close()
+            if dc_csv.strip():
+                (input_dir / "Direct_Costs_By_Project.csv").write_text(dc_csv, encoding="utf-8")
+            else:
+                conn = get_connection()
+                try:
+                    uf = _db.get_latest_uploaded_file(conn, fy_id, "direct_costs")
+                finally:
+                    conn.close()
+                if uf:
+                    (input_dir / "Direct_Costs_By_Project.csv").write_bytes(uf["content"])
+
+            # Scenario_Events from DB scenarios
+            conn = get_connection()
+            try:
+                scenario_df = _db.build_scenario_events_df_from_db(conn, fy_id)
+                if not scenario_df.empty:
+                    scenario_df.to_csv(input_dir / "Scenario_Events.csv", index=False)
+            finally:
+                conn.close()
+
+            if not (input_dir / "Scenario_Events.csv").exists():
+                (input_dir / "Scenario_Events.csv").write_text(
+                    "Scenario,EffectivePeriod,Type,Project,DeltaDirectLabor$,DeltaDirectLaborHrs,"
+                    "DeltaSubk,DeltaODC,DeltaTravel,DeltaPoolFringe,DeltaPoolOverhead,DeltaPoolGA,Notes\n"
+                    "Base,2025-01,ADJUST,,0,0,0,0,0,0,0,0,No changes\n"
+                )
+
+            required = ["GL_Actuals.csv", "Account_Map.csv", "Direct_Costs_By_Project.csv", "Scenario_Events.csv"]
+            missing = [n for n in required if not (input_dir / n).exists()]
+            if missing:
+                logger.warning("_run_db_forecast: missing inputs %s for fy_id=%s trigger=%s", missing, fy_id, trigger)
+                return None
+
+            plan = PlannerAgent().plan(
+                scenario=scenario if scenario and scenario != "Base" else None,
+                forecast_months=forecast_months,
+                run_rate_months=run_rate_months,
+                events_path=input_dir / "Scenario_Events.csv",
+            )
+            plan = _replace(plan, fy_start=pd.Period(fy["start_month"], freq="M"))
+
+            results = AnalystAgent().run(input_dir=input_dir, config=cfg, plan=plan)
+
+            conn = get_connection()
+            try:
+                ref_rates = list_reference_rates(conn, fy_id, rate_type="budget")
+                ref_thresholds = list_reference_rates(conn, fy_id, rate_type="threshold")
+            finally:
+                conn.close()
+            if ref_rates:
+                budget_map: dict = {}
+                for rr in ref_rates:
+                    budget_map.setdefault(rr["pool_group_name"], {})[rr["period"]] = rr["rate_value"]
+                for res in results:
+                    res.assumptions["budget_rates"] = budget_map
+            if ref_thresholds:
+                threshold_map: dict = {}
+                for rr in ref_thresholds:
+                    threshold_map.setdefault(rr["pool_group_name"], {})[rr["period"]] = rr["rate_value"]
+                for res in results:
+                    res.assumptions["rate_thresholds"] = threshold_map
+
+            ReporterAgent().package(out_dir=out_dir, results=results)
+            payload = _zip_dir_bytes(out_dir)
+
+            assumptions_str = _json.dumps(results[0].assumptions, default=str) if results else "{}"
+            conn = get_connection()
+            try:
+                run_id = save_forecast_run(
+                    conn,
+                    fiscal_year_id=fy_id,
+                    scenario=scenario or "",
+                    forecast_months=forecast_months,
+                    run_rate_months=run_rate_months,
+                    assumptions_json=assumptions_str,
+                    output_zip=payload,
+                    trigger=trigger,
+                )
+            finally:
+                conn.close()
+
+            logger.info("_run_db_forecast: saved run_id=%s fy_id=%s trigger=%s", run_id, fy_id, trigger)
+            return run_id
+
+    except Exception:
+        logger.exception("_run_db_forecast: failed for fy_id=%s trigger=%s", fy_id, trigger)
+        return None
+
+
 async def _write_upload(upload: Optional[UploadFile], path: Path) -> None:
     if upload is None:
         return
