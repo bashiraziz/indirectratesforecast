@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import type { Scenario, ForecastRun } from "@/lib/types";
 import { authClient } from "@/lib/auth-client";
+import { useRouter } from "next/navigation";
 
 interface GridData {
   headers: string[];
@@ -175,8 +176,33 @@ function FileDropField({
   );
 }
 
+function aggregateYearly(data: GridData, isRatesTable: boolean): GridData {
+  const yearMap = new Map<string, { values: (number | string)[][]; count: number }>();
+  for (const row of data.rows) {
+    const period = String(row[0] ?? "");
+    const year = period.length >= 4 ? period.substring(0, 4) : period;
+    if (!yearMap.has(year)) yearMap.set(year, { values: [], count: 0 });
+    yearMap.get(year)!.values.push(row);
+    yearMap.get(year)!.count++;
+  }
+  const rows: (number | string)[][] = [];
+  for (const [year, { values }] of yearMap) {
+    const agg: (number | string)[] = [year];
+    for (let ci = 1; ci < data.headers.length; ci++) {
+      const nums = values.map((r) => r[ci]).filter((v) => typeof v === "number") as number[];
+      if (nums.length === 0) { agg.push("—"); continue; }
+      // Rates: average; dollar amounts: sum
+      agg.push(isRatesTable ? nums.reduce((a, b) => a + b, 0) / nums.length : nums.reduce((a, b) => a + b, 0));
+    }
+    rows.push(agg);
+  }
+  return { headers: data.headers, rows };
+}
+
 function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onCellClick, compact = false }: { title: string; data: GridData; isRatesTable: boolean; budgetRates?: Record<string, Record<string, number>> | null; thresholdRates?: Record<string, Record<string, number>> | null; onCellClick?: (period: string, header: string, value: string | number) => void; compact?: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [yearlyView, setYearlyView] = useState(false);
+  const displayData = yearlyView ? aggregateYearly(data, isRatesTable) : data;
   return (
     <div className="border border-border rounded-lg overflow-hidden mb-4">
       <div
@@ -185,10 +211,18 @@ function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onC
       >
         <span style={{ fontSize: 12, fontFamily: "monospace" }}>{collapsed ? "\u25B6" : "\u25BC"}</span>
         <span className="font-semibold text-sm">{title}</span>
-        <span className="text-xs text-muted-foreground ml-auto">{data.rows.length} rows</span>
+        <span className="text-xs text-muted-foreground ml-auto">{displayData.rows.length} rows</span>
         <button
-          onClick={(e) => { e.stopPropagation(); exportGridCsv(data.headers, data.rows, `${title.toLowerCase().replace(/\s+/g, "_")}.csv`); }}
+          onClick={(e) => { e.stopPropagation(); setYearlyView((v) => !v); }}
           style={{ fontSize: 11, padding: "2px 8px", marginLeft: 8 }}
+          className="bg-secondary!"
+          title={yearlyView ? "Switch to monthly view" : "Switch to yearly view"}
+        >
+          {yearlyView ? "Monthly" : "Yearly"}
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); exportGridCsv(displayData.headers, displayData.rows, `${title.toLowerCase().replace(/\s+/g, "_")}.csv`); }}
+          style={{ fontSize: 11, padding: "2px 8px", marginLeft: 4 }}
           className="bg-secondary!"
         >
           Export CSV
@@ -199,7 +233,7 @@ function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onC
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="border-b border-border bg-accent/30">
-                {data.headers.map((h, i) => {
+                {displayData.headers.map((h, i) => {
                   const isYtd = h.endsWith("(YTD)");
                   const isMtdGroup = h.endsWith("(MTD)");
                   return (
@@ -221,12 +255,12 @@ function GridTable({ title, data, isRatesTable, budgetRates, thresholdRates, onC
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row, ri) => {
+              {displayData.rows.map((row, ri) => {
                 const period = String(row[0] ?? "");
                 return (
                   <tr key={ri} className="border-b border-border/50">
                     {row.map((cell, ci) => {
-                      const hdr = data.headers[ci];
+                      const hdr = displayData.headers[ci];
                       const isYtd = hdr.endsWith("(YTD)");
                       const isMtdGroup = hdr.endsWith("(MTD)");
                       // Budget comparison for rate cells
@@ -428,6 +462,8 @@ function ImpactsTable({ data, fyStartMonth, overBudgetKeys, compact = false }: {
   const [showDetail, setShowDetail] = useState(true);
   const [showMtd, setShowMtd] = useState(true);
   const [showYtd, setShowYtd] = useState(true);
+  const [yearlyOnly, setYearlyOnly] = useState(false);
+  const [collapsedFYs, setCollapsedFYs] = useState<Set<string>>(new Set());
 
   const periodIdx = data.headers.indexOf("Period");
   const projectIdx = data.headers.indexOf("Project");
@@ -483,6 +519,54 @@ function ImpactsTable({ data, fyStartMonth, overBudgetKeys, compact = false }: {
     });
   }
 
+  // Per-project yearly aggregation: (FY, Project) → summed row
+  const fyProjectRows = new Map<string, Map<string, (string | number)[][]>>();
+  for (const row of data.rows) {
+    const period = String(row[periodIdx] ?? "");
+    const fy = fiscalYearOf(period, fyStartMonth);
+    const project = String(row[projectIdx] ?? "");
+    if (!fyProjectRows.has(fy)) fyProjectRows.set(fy, new Map());
+    const pm = fyProjectRows.get(fy)!;
+    if (!pm.has(project)) pm.set(project, []);
+    pm.get(project)!.push(row);
+  }
+
+  const yearlyRows: { row: (string | number)[]; isTotalRow: boolean; isGrandTotal: boolean; fy: string }[] = [];
+  for (const fy of fyOrder) {
+    const pm = fyProjectRows.get(fy)!;
+    for (const [project, rows] of pm) {
+      const aggRow = data.headers.map((h, ci) => {
+        if (ci === periodIdx) return fy;
+        if (ci === projectIdx) return project;
+        let sum = 0; let hasNum = false;
+        for (const r of rows) { const v = r[ci]; if (typeof v === "number") { sum += v; hasNum = true; } }
+        return hasNum ? sum : "";
+      });
+      yearlyRows.push({ row: aggRow, isTotalRow: false, isGrandTotal: false, fy });
+    }
+    yearlyRows.push({ row: sumRows(fyGroups.get(fy)!, fy), isTotalRow: true, isGrandTotal: false, fy });
+  }
+  yearlyRows.push({ row: sumRows(data.rows, "GRAND"), isTotalRow: true, isGrandTotal: true, fy: "" });
+
+  // Flat list for yearly view: FY header entries interleaved with data rows
+  type YearlyItem =
+    | { kind: "fyHeader"; fy: string }
+    | { kind: "data"; d: (typeof yearlyRows)[0] };
+  const yearlyDisplayItems: YearlyItem[] = [];
+  for (const fy of fyOrder) {
+    yearlyDisplayItems.push({ kind: "fyHeader", fy });
+    const isCollapsed = collapsedFYs.has(fy);
+    for (const d of yearlyRows.filter((r) => r.fy === fy)) {
+      if (d.isTotalRow) {
+        yearlyDisplayItems.push({ kind: "data", d }); // always show FY total
+      } else if (!isCollapsed && showDetail) {
+        yearlyDisplayItems.push({ kind: "data", d });
+      }
+    }
+  }
+  const grandTotalEntry = yearlyRows.find((r) => r.isGrandTotal);
+  if (grandTotalEntry) yearlyDisplayItems.push({ kind: "data", d: grandTotalEntry });
+
   for (const fy of fyOrder) {
     const rows = fyGroups.get(fy)!;
     for (const r of rows) {
@@ -504,8 +588,30 @@ function ImpactsTable({ data, fyStartMonth, overBudgetKeys, compact = false }: {
         <span className="font-semibold text-sm">Project Impacts</span>
         <span className="text-xs text-muted-foreground ml-auto">{data.rows.length} rows</span>
         <button
-          onClick={(e) => { e.stopPropagation(); exportGridCsv(data.headers, data.rows, "project_impacts.csv"); }}
+          onClick={(e) => { e.stopPropagation(); setYearlyOnly((v) => !v); }}
           style={{ fontSize: 11, padding: "2px 8px", marginLeft: 8 }}
+          className="bg-secondary!"
+          title={yearlyOnly ? "Switch to monthly view" : "Show yearly totals only"}
+        >
+          {yearlyOnly ? "Monthly" : "Yearly"}
+        </button>
+        {yearlyOnly && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const allCollapsed = fyOrder.every((fy) => collapsedFYs.has(fy));
+              setCollapsedFYs(allCollapsed ? () => new Set() : () => new Set(fyOrder));
+            }}
+            style={{ fontSize: 11, padding: "2px 8px", marginLeft: 4 }}
+            className="bg-secondary!"
+            title={fyOrder.every((fy) => collapsedFYs.has(fy)) ? "Expand all years" : "Collapse all years"}
+          >
+            {fyOrder.every((fy) => collapsedFYs.has(fy)) ? "Expand All" : "Collapse All"}
+          </button>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); exportGridCsv(data.headers, data.rows, "project_impacts.csv"); }}
+          style={{ fontSize: 11, padding: "2px 8px", marginLeft: 4 }}
           className="bg-secondary!"
         >
           Export CSV
@@ -581,59 +687,141 @@ function ImpactsTable({ data, fyStartMonth, overBudgetKeys, compact = false }: {
                 </tr>
               </thead>
               <tbody>
-                {displayRows
-                  .filter((d) => showDetail || d.isTotalRow)
-                  .map((d, ri) => (
-                    <tr
-                      key={ri}
-                      className={`border-b ${
-                        d.isGrandTotal
-                          ? "border-border border-t-2 bg-accent/40 font-bold"
-                          : d.isTotalRow
-                            ? "border-border bg-accent/20 font-semibold"
-                            : "border-border/50"
-                      }`}
-                    >
-                      {visibleColIndices.map((ci) => {
-                        const hdr = data.headers[ci];
-                        const isYtd = hdr.includes("(YTD)");
-                        const isMtdGroup = hdr.includes("(MTD)");
-                        // Check if this indirect $ cell's underlying rate exceeds budget
-                        const period = String(d.row[periodIdx] ?? "");
-                        const rateName = colToRateName.get(ci);
-                        const isOver = !d.isTotalRow && rateName && overBudgetKeys?.has(`${rateName}|${period}`);
-                        let bgColor: string | undefined;
-                        if (d.isGrandTotal) {
-                          bgColor = isYtd ? "rgba(99,140,255,0.22)" : "rgba(130,130,160,0.18)";
-                        } else if (d.isTotalRow) {
-                          bgColor = isYtd ? "rgba(99,140,255,0.15)" : "rgba(130,130,160,0.10)";
-                        } else {
-                          bgColor = isYtd ? "rgba(99,140,255,0.08)" : undefined;
-                        }
-                        if (isOver) bgColor = "rgba(239,68,68,0.18)";
-                        return (
+                {yearlyOnly ? (
+                  yearlyDisplayItems.map((item, ri) => {
+                    if (item.kind === "fyHeader") {
+                      const isCollapsed = collapsedFYs.has(item.fy);
+                      return (
+                        <tr
+                          key={`fy-hdr-${item.fy}`}
+                          className="border-b border-border bg-accent/40 cursor-pointer hover:bg-accent/60 select-none"
+                          onClick={() =>
+                            setCollapsedFYs((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.fy)) next.delete(item.fy);
+                              else next.add(item.fy);
+                              return next;
+                            })
+                          }
+                        >
                           <td
-                            key={ci}
-                            className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} ${
-                              ci <= 1
-                                ? `sticky font-medium ${d.isTotalRow ? "" : "bg-background/80"}`
-                                : "text-right font-mono"
-                            } ${d.isTotalRow ? "font-semibold" : ""} ${d.isGrandTotal ? "font-bold" : ""}`}
-                            style={{
-                              left: ci === 0 ? 0 : ci === 1 ? "7.5rem" : undefined,
-                              zIndex: ci === 0 ? 3 : ci === 1 ? 2 : 0,
-                              borderLeft: isMtdGroup ? "2px solid var(--border)" : undefined,
-                              backgroundColor: ci <= 1 && d.isTotalRow
-                                ? (d.isGrandTotal ? "rgba(130,130,160,0.22)" : "rgba(130,130,160,0.14)")
-                                : bgColor,
-                            }}
+                            colSpan={visibleColIndices.length}
+                            style={{ padding: "5px 12px", fontWeight: 700, fontSize: 12 }}
                           >
-                            {fmtCell(d.row[ci], hdr, false)}
+                            <span style={{ fontFamily: "monospace", marginRight: 6 }}>
+                              {isCollapsed ? "▶" : "▼"}
+                            </span>
+                            {item.fy}
                           </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                        </tr>
+                      );
+                    }
+                    const { d } = item;
+                    return (
+                      <tr
+                        key={`yr-${ri}`}
+                        className={`border-b ${
+                          d.isGrandTotal
+                            ? "border-border border-t-2 bg-accent/40 font-bold"
+                            : d.isTotalRow
+                              ? "border-border bg-accent/20 font-semibold"
+                              : "border-border/50"
+                        }`}
+                      >
+                        {visibleColIndices.map((ci) => {
+                          const hdr = data.headers[ci];
+                          const isYtd = hdr.includes("(YTD)");
+                          const isMtdGroup = hdr.includes("(MTD)");
+                          const period = String(d.row[periodIdx] ?? "");
+                          const rateName = colToRateName.get(ci);
+                          const isOver = !d.isTotalRow && rateName && overBudgetKeys?.has(`${rateName}|${period}`);
+                          let bgColor: string | undefined;
+                          if (d.isGrandTotal) {
+                            bgColor = isYtd ? "rgba(99,140,255,0.22)" : "rgba(130,130,160,0.18)";
+                          } else if (d.isTotalRow) {
+                            bgColor = isYtd ? "rgba(99,140,255,0.15)" : "rgba(130,130,160,0.10)";
+                          } else {
+                            bgColor = isYtd ? "rgba(99,140,255,0.08)" : undefined;
+                          }
+                          if (isOver) bgColor = "rgba(239,68,68,0.18)";
+                          return (
+                            <td
+                              key={ci}
+                              className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} ${
+                                ci <= 1
+                                  ? `sticky font-medium ${d.isTotalRow ? "" : "bg-background/80"}`
+                                  : "text-right font-mono"
+                              } ${d.isTotalRow ? "font-semibold" : ""} ${d.isGrandTotal ? "font-bold" : ""}`}
+                              style={{
+                                left: ci === 0 ? 0 : ci === 1 ? "7.5rem" : undefined,
+                                zIndex: ci === 0 ? 3 : ci === 1 ? 2 : 0,
+                                borderLeft: isMtdGroup ? "2px solid var(--border)" : undefined,
+                                backgroundColor: ci <= 1 && d.isTotalRow
+                                  ? (d.isGrandTotal ? "rgba(130,130,160,0.22)" : "rgba(130,130,160,0.14)")
+                                  : bgColor,
+                              }}
+                            >
+                              {fmtCell(d.row[ci], hdr, false)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })
+                ) : (
+                  displayRows
+                    .filter((d) => showDetail || d.isTotalRow)
+                    .map((d, ri) => (
+                      <tr
+                        key={ri}
+                        className={`border-b ${
+                          d.isGrandTotal
+                            ? "border-border border-t-2 bg-accent/40 font-bold"
+                            : d.isTotalRow
+                              ? "border-border bg-accent/20 font-semibold"
+                              : "border-border/50"
+                        }`}
+                      >
+                        {visibleColIndices.map((ci) => {
+                          const hdr = data.headers[ci];
+                          const isYtd = hdr.includes("(YTD)");
+                          const isMtdGroup = hdr.includes("(MTD)");
+                          const period = String(d.row[periodIdx] ?? "");
+                          const rateName = colToRateName.get(ci);
+                          const isOver = !d.isTotalRow && rateName && overBudgetKeys?.has(`${rateName}|${period}`);
+                          let bgColor: string | undefined;
+                          if (d.isGrandTotal) {
+                            bgColor = isYtd ? "rgba(99,140,255,0.22)" : "rgba(130,130,160,0.18)";
+                          } else if (d.isTotalRow) {
+                            bgColor = isYtd ? "rgba(99,140,255,0.15)" : "rgba(130,130,160,0.10)";
+                          } else {
+                            bgColor = isYtd ? "rgba(99,140,255,0.08)" : undefined;
+                          }
+                          if (isOver) bgColor = "rgba(239,68,68,0.18)";
+                          return (
+                            <td
+                              key={ci}
+                              className={`${compact ? "px-2 py-1.5" : "px-3 py-2"} ${
+                                ci <= 1
+                                  ? `sticky font-medium ${d.isTotalRow ? "" : "bg-background/80"}`
+                                  : "text-right font-mono"
+                              } ${d.isTotalRow ? "font-semibold" : ""} ${d.isGrandTotal ? "font-bold" : ""}`}
+                              style={{
+                                left: ci === 0 ? 0 : ci === 1 ? "7.5rem" : undefined,
+                                zIndex: ci === 0 ? 3 : ci === 1 ? 2 : 0,
+                                borderLeft: isMtdGroup ? "2px solid var(--border)" : undefined,
+                                backgroundColor: ci <= 1 && d.isTotalRow
+                                  ? (d.isGrandTotal ? "rgba(130,130,160,0.22)" : "rgba(130,130,160,0.14)")
+                                  : bgColor,
+                              }}
+                            >
+                              {fmtCell(d.row[ci], hdr, false)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))
+                )}
               </tbody>
             </table>
           </div>
@@ -956,6 +1144,13 @@ export default function ForecastPage() {
   const [excelDownloadUrl, setExcelDownloadUrl] = useState<string | null>(null);
   const [ratesGrid, setRatesGrid] = useState<GridData | null>(null);
   const [impactsGrid, setImpactsGrid] = useState<GridData | null>(null);
+  const [loadingRunId, setLoadingRunId] = useState<number | null>(null);
+
+  // Nav warning when results exist
+  const router = useRouter();
+  const [showNavWarning, setShowNavWarning] = useState(false);
+  const [pendingNavUrl, setPendingNavUrl] = useState<string | null>(null);
+  const bypassWarning = useRef(false);
   const [fyStartMonth, setFyStartMonth] = useState(1);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   // Budget rates from DB: {rateName: {period: decimalValue}}
@@ -981,6 +1176,53 @@ export default function ForecastPage() {
       }
     }
   }, [inputMode, selectedFyId, fiscalYears]);
+
+  const hasResults = !!(ratesGrid || impactsGrid);
+
+  // Warn on browser refresh / tab close / external navigation
+  useEffect(() => {
+    if (!hasResults) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasResults]);
+
+  // Intercept in-app link clicks (capture phase, before Next.js routing fires)
+  useEffect(() => {
+    if (!hasResults) return;
+    const handleClick = (e: MouseEvent) => {
+      if (bypassWarning.current) return;
+      const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") ?? "";
+      // Only intercept internal navigation links
+      if (!href || href.startsWith("http") || href.startsWith("//") || href.startsWith("#") || href.startsWith("mailto:")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPendingNavUrl(href);
+      setShowNavWarning(true);
+    };
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
+  }, [hasResults]);
+
+  function proceedNavigation() {
+    setShowNavWarning(false);
+    if (pendingNavUrl) {
+      bypassWarning.current = true;
+      router.push(pendingNavUrl);
+      setPendingNavUrl(null);
+      setTimeout(() => { bypassWarning.current = false; }, 200);
+    }
+  }
+
+  function cancelNavigation() {
+    setShowNavWarning(false);
+    setPendingNavUrl(null);
+  }
 
   function setCheck(key: string, status: FileCheck["status"], issues: string[] = []) {
     setFileChecks((prev) => ({ ...prev, [key]: { status, issues } }));
@@ -1029,6 +1271,158 @@ export default function ForecastPage() {
       }
     };
     reader.readAsText(file);
+  }
+
+  async function loadZipResults(blob: Blob) {
+    if (zipDownloadUrl) URL.revokeObjectURL(zipDownloadUrl);
+    const newZipUrl = URL.createObjectURL(blob);
+    setZipDownloadUrl(newZipUrl);
+
+    const zip = await JSZip.loadAsync(blob);
+    const excelFile = zip.file("rate_pack.xlsx");
+
+    const narrs: { scenario: string; text: string }[] = [];
+    for (const name of Object.keys(zip.files)) {
+      const match = name.match(/^(.+)\/narrative\.md$/);
+      if (match) {
+        const file = zip.file(name);
+        if (file) narrs.push({ scenario: match[1], text: await file.async("string") });
+      }
+    }
+    if (narrs.length === 0) {
+      const rootNarr = zip.file("narrative.md");
+      if (rootNarr) narrs.push({ scenario: "", text: await rootNarr.async("string") });
+    }
+    setNarratives(narrs);
+
+    if (excelFile) {
+      const excelBlob = await excelFile.async("blob");
+      if (excelDownloadUrl) URL.revokeObjectURL(excelDownloadUrl);
+      setExcelDownloadUrl(URL.createObjectURL(excelBlob));
+
+      try {
+        const excelBuf = await excelFile.async("arraybuffer");
+        const wb = XLSX.read(excelBuf, { type: "array" });
+
+        function parseSheet(sheetSuffix: string): GridData | null {
+          const sheetName = wb.SheetNames.find((n) => n.endsWith(sheetSuffix));
+          if (!sheetName) return null;
+          const aoa: (string | number)[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1 });
+          if (aoa.length < 2) return null;
+          return { headers: aoa[0].map(String), rows: aoa.slice(1) };
+        }
+
+        const mtd = parseSheet(" - Rates");
+        const ytd = parseSheet(" - YTD Rates");
+        if (mtd && ytd) {
+          const rateNames = mtd.headers.slice(1);
+          const mergedHeaders = ["Period"];
+          for (const r of rateNames) mergedHeaders.push(`${r} (MTD)`, `${r} (YTD)`);
+          const ytdByPeriod = new Map<string, (string | number)[]>();
+          const ytdPeriodIdx = ytd.headers.indexOf("Period");
+          for (const row of ytd.rows) ytdByPeriod.set(String(row[ytdPeriodIdx]), row);
+          const mergedRows = mtd.rows.map((mtdRow) => {
+            const period = String(mtdRow[0]);
+            const ytdRow = ytdByPeriod.get(period);
+            const merged: (string | number)[] = [period];
+            for (let i = 1; i < mtd.headers.length; i++) {
+              merged.push(mtdRow[i] ?? "");
+              const ytdColIdx = ytd.headers.indexOf(mtd.headers[i]);
+              merged.push(ytdRow && ytdColIdx >= 0 ? (ytdRow[ytdColIdx] ?? "") : "");
+            }
+            return merged;
+          });
+          setRatesGrid({ headers: mergedHeaders, rows: mergedRows });
+        } else {
+          setRatesGrid(mtd);
+        }
+
+        const impacts = parseSheet(" - Impacts");
+        if (impacts) {
+          const rawHeaders = impacts.headers;
+          const ytdSuffixCols = new Set(rawHeaders.filter((h) => h.endsWith("$_ytd")).map((h) => h.replace("$_ytd", "$")));
+          const hasYtd = ytdSuffixCols.size > 0;
+          const directCols = ["DirectLabor$", "Subk", "ODC", "Travel"];
+          const directColIndices = directCols.map((c) => rawHeaders.indexOf(c)).filter((i) => i >= 0);
+          const mtdIndirectIndices = rawHeaders.map((h, i) => {
+            if (h.endsWith("$_ytd") || h === "LoadedCost$" || h === "LoadedCost$_ytd") return -1;
+            if (directCols.includes(h) || h === "Period" || h === "Project") return -1;
+            return h.endsWith("$") ? i : -1;
+          }).filter((i) => i >= 0);
+          const ytdIndirectIndices = rawHeaders.map((h, i) => (h.endsWith("$_ytd") && h !== "LoadedCost$_ytd" ? i : -1)).filter((i) => i >= 0);
+          impacts.headers = rawHeaders.map((h) => {
+            if (h.endsWith("$_ytd")) return h.replace("$_ytd", "$ (YTD)");
+            if (ytdSuffixCols.has(h)) return `${h} (MTD)`;
+            if (h === "LoadedCost$" && hasYtd) return "LoadedCost$ (MTD)";
+            return h;
+          });
+          function sumIdx(row: (string | number)[], indices: number[]): number {
+            let s = 0; for (const i of indices) { const v = row[i]; if (typeof v === "number") s += v; } return s;
+          }
+          const lastDirectIdx = Math.max(...directColIndices);
+          const insertAt = lastDirectIdx + 1;
+          const newHeaders = [...impacts.headers];
+          newHeaders.splice(insertAt, 0, "TotalDirect$");
+          if (mtdIndirectIndices.length > 0) newHeaders.push("TotalIndirect$ (MTD)");
+          if (ytdIndirectIndices.length > 0) newHeaders.push("TotalIndirect$ (YTD)");
+          impacts.rows = impacts.rows.map((row) => {
+            const newRow = [...row];
+            newRow.splice(insertAt, 0, sumIdx(row, directColIndices));
+            if (mtdIndirectIndices.length > 0) newRow.push(sumIdx(row, mtdIndirectIndices));
+            if (ytdIndirectIndices.length > 0) newRow.push(sumIdx(row, ytdIndirectIndices));
+            return newRow;
+          });
+          impacts.headers = newHeaders;
+        }
+        setImpactsGrid(impacts);
+        setPoolsGrid(parseSheet(" - Pools"));
+        setBasesGrid(parseSheet(" - Bases"));
+
+        if (compareMode) {
+          const scenMap = new Map<string, GridData>();
+          for (const sn of wb.SheetNames) {
+            const m = sn.match(/^(.+) - Rates$/);
+            if (m) {
+              const aoa: (string | number)[][] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1 });
+              if (aoa.length >= 2) scenMap.set(m[1], { headers: aoa[0].map(String), rows: aoa.slice(1) });
+            }
+          }
+          setAllScenariosRates(scenMap.size > 1 ? scenMap : null);
+        }
+      } catch {
+        // Non-fatal: tables just won't show
+      }
+    } else {
+      setExcelDownloadUrl(null);
+    }
+
+    const charts: string[] = [];
+    await Promise.all(
+      Object.keys(zip.files).map(async (name) => {
+        if (!name.startsWith("charts/") || !name.endsWith(".png")) return;
+        const file = zip.file(name);
+        if (!file) return;
+        charts.push(URL.createObjectURL(await file.async("blob")));
+      })
+    );
+    charts.sort();
+    setChartUrls(charts);
+
+    try {
+      const assumFile = zip.file("assumptions.json")
+        ?? Object.keys(zip.files).filter((n) => n.endsWith("/assumptions.json")).map((n) => zip.file(n)).find(Boolean);
+      if (assumFile) {
+        const assumJson = JSON.parse(await assumFile.async("string"));
+        if (assumJson.fy_start) {
+          const startMonth = parseInt(assumJson.fy_start.split("-")[1], 10);
+          if (startMonth >= 1 && startMonth <= 12) setFyStartMonth(startMonth);
+        }
+        if (assumJson.budget_rates) setBudgetRates(assumJson.budget_rates);
+        if (assumJson.rate_thresholds) setThresholdRates(assumJson.rate_thresholds);
+      }
+    } catch {
+      // Non-fatal
+    }
   }
 
   async function runForecast() {
@@ -1103,221 +1497,7 @@ export default function ForecastPage() {
       }
 
       const blob = await resp.blob();
-      if (zipDownloadUrl) URL.revokeObjectURL(zipDownloadUrl);
-      const newZipUrl = URL.createObjectURL(blob);
-      setZipDownloadUrl(newZipUrl);
-
-      const zip = await JSZip.loadAsync(blob);
-
-      const excelFile = zip.file("rate_pack.xlsx");
-
-      // Collect all scenario narratives (e.g. Base/narrative.md, Win/narrative.md)
-      const narrs: { scenario: string; text: string }[] = [];
-      for (const name of Object.keys(zip.files)) {
-        const match = name.match(/^(.+)\/narrative\.md$/);
-        if (match) {
-          const file = zip.file(name);
-          if (file) narrs.push({ scenario: match[1], text: await file.async("string") });
-        }
-      }
-      // Fall back to root narrative.md if no per-scenario files found
-      if (narrs.length === 0) {
-        const rootNarr = zip.file("narrative.md");
-        if (rootNarr) narrs.push({ scenario: "", text: await rootNarr.async("string") });
-      }
-      setNarratives(narrs);
-
-      if (excelFile) {
-        const excelBlob = await excelFile.async("blob");
-        if (excelDownloadUrl) URL.revokeObjectURL(excelDownloadUrl);
-        setExcelDownloadUrl(URL.createObjectURL(excelBlob));
-
-        // Parse rates and impacts sheets from the Excel file
-        try {
-          const excelBuf = await excelFile.async("arraybuffer");
-          const wb = XLSX.read(excelBuf, { type: "array" });
-
-          function parseSheet(sheetSuffix: string): GridData | null {
-            const sheetName = wb.SheetNames.find((n) => n.endsWith(sheetSuffix));
-            if (!sheetName) return null;
-            const aoa: (string | number)[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1 });
-            if (aoa.length < 2) return null;
-            return { headers: aoa[0].map(String), rows: aoa.slice(1) };
-          }
-
-          // Merge MTD and YTD rates into one grid with interleaved columns
-          const mtd = parseSheet(" - Rates");
-          const ytd = parseSheet(" - YTD Rates");
-          if (mtd && ytd) {
-            // Both have Period as first column, then rate columns
-            const rateNames = mtd.headers.slice(1);
-            const mergedHeaders = ["Period"];
-            for (const r of rateNames) {
-              mergedHeaders.push(`${r} (MTD)`, `${r} (YTD)`);
-            }
-            // Build YTD lookup by period
-            const ytdByPeriod = new Map<string, (string | number)[]>();
-            const ytdPeriodIdx = ytd.headers.indexOf("Period");
-            for (const row of ytd.rows) {
-              ytdByPeriod.set(String(row[ytdPeriodIdx]), row);
-            }
-            const mergedRows = mtd.rows.map((mtdRow) => {
-              const period = String(mtdRow[0]);
-              const ytdRow = ytdByPeriod.get(period);
-              const merged: (string | number)[] = [period];
-              for (let i = 1; i < mtd.headers.length; i++) {
-                merged.push(mtdRow[i] ?? "");
-                // Find matching YTD column
-                const colName = mtd.headers[i];
-                const ytdColIdx = ytd.headers.indexOf(colName);
-                merged.push(ytdRow && ytdColIdx >= 0 ? (ytdRow[ytdColIdx] ?? "") : "");
-              }
-              return merged;
-            });
-            setRatesGrid({ headers: mergedHeaders, rows: mergedRows });
-          } else {
-            setRatesGrid(mtd);
-          }
-          // Parse impacts: label MTD/YTD columns and add Total Direct / Total Indirect
-          const impacts = parseSheet(" - Impacts");
-          if (impacts) {
-            const rawHeaders = impacts.headers;
-
-            // Identify _ytd columns and their MTD counterparts
-            const ytdSuffixCols = new Set(
-              rawHeaders.filter((h) => h.endsWith("$_ytd")).map((h) => h.replace("$_ytd", "$"))
-            );
-            const hasYtd = ytdSuffixCols.size > 0;
-
-            // Identify direct cost columns (not Period, not Project, not indirect, not LoadedCost)
-            const directCols = ["DirectLabor$", "Subk", "ODC", "Travel"];
-            const directColIndices = directCols.map((c) => rawHeaders.indexOf(c)).filter((i) => i >= 0);
-
-            // Identify MTD indirect columns (end with $ but not direct, not LoadedCost$, not _ytd)
-            const mtdIndirectIndices = rawHeaders
-              .map((h, i) => {
-                if (h.endsWith("$_ytd") || h === "LoadedCost$" || h === "LoadedCost$_ytd") return -1;
-                if (directCols.includes(h)) return -1;
-                if (h === "Period" || h === "Project") return -1;
-                if (h.endsWith("$")) return i;
-                return -1;
-              })
-              .filter((i) => i >= 0);
-
-            // Identify YTD indirect columns (end with $_ytd, not LoadedCost$_ytd)
-            const ytdIndirectIndices = rawHeaders
-              .map((h, i) => (h.endsWith("$_ytd") && h !== "LoadedCost$_ytd" ? i : -1))
-              .filter((i) => i >= 0);
-
-            // Rename headers
-            impacts.headers = rawHeaders.map((h) => {
-              if (h.endsWith("$_ytd")) return h.replace("$_ytd", "$ (YTD)");
-              if (ytdSuffixCols.has(h)) return `${h} (MTD)`;
-              if (h === "LoadedCost$" && hasYtd) return "LoadedCost$ (MTD)";
-              return h;
-            });
-
-            // Helper to sum indices for a row
-            function sumIndices(row: (string | number)[], indices: number[]): number {
-              let s = 0;
-              for (const i of indices) {
-                const v = row[i];
-                if (typeof v === "number") s += v;
-              }
-              return s;
-            }
-
-            // Add computed columns to each row, insert after direct costs and before indirect
-            // Find insertion point: after last direct col
-            const lastDirectIdx = Math.max(...directColIndices);
-            const insertAt = lastDirectIdx + 1;
-
-            // Build new headers
-            const newHeaders = [...impacts.headers];
-            const newColsAtInsert = ["TotalDirect$"];
-            newHeaders.splice(insertAt, 0, ...newColsAtInsert);
-
-            // Add TotalIndirect columns at the end (before LoadedCost if present)
-            if (mtdIndirectIndices.length > 0) newHeaders.push("TotalIndirect$ (MTD)");
-            if (ytdIndirectIndices.length > 0) newHeaders.push("TotalIndirect$ (YTD)");
-
-            // Compute rows
-            impacts.rows = impacts.rows.map((row) => {
-              const totalDirect = sumIndices(row, directColIndices);
-              const newRow = [...row];
-              newRow.splice(insertAt, 0, totalDirect);
-              if (mtdIndirectIndices.length > 0) newRow.push(sumIndices(row, mtdIndirectIndices));
-              if (ytdIndirectIndices.length > 0) newRow.push(sumIndices(row, ytdIndirectIndices));
-              return newRow;
-            });
-            impacts.headers = newHeaders;
-          }
-          setImpactsGrid(impacts);
-
-          // Parse pools and bases for drill-down
-          setPoolsGrid(parseSheet(" - Pools"));
-          setBasesGrid(parseSheet(" - Bases"));
-
-          // Parse all scenario rate sheets for comparison mode
-          if (compareMode) {
-            const scenMap = new Map<string, GridData>();
-            for (const sn of wb.SheetNames) {
-              const m = sn.match(/^(.+) - Rates$/);
-              if (m) {
-                const aoa: (string | number)[][] = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1 });
-                if (aoa.length >= 2) {
-                  scenMap.set(m[1], { headers: aoa[0].map(String), rows: aoa.slice(1) });
-                }
-              }
-            }
-            setAllScenariosRates(scenMap.size > 1 ? scenMap : null);
-          }
-        } catch {
-          // Non-fatal: tables just won't show
-        }
-      } else {
-        setExcelDownloadUrl(null);
-      }
-
-      // Charts: charts/*.png
-      const charts: string[] = [];
-      await Promise.all(
-        Object.keys(zip.files).map(async (name) => {
-          if (!name.startsWith("charts/") || !name.endsWith(".png")) return;
-          const file = zip.file(name);
-          if (!file) return;
-          const imgBlob = await file.async("blob");
-          charts.push(URL.createObjectURL(imgBlob));
-        })
-      );
-      charts.sort();
-      setChartUrls(charts);
-
-      // Read fy_start from assumptions.json to set FY grouping
-      try {
-        const assumFile = zip.file("assumptions.json")
-          ?? Object.keys(zip.files)
-              .filter((n) => n.endsWith("/assumptions.json"))
-              .map((n) => zip.file(n))
-              .find(Boolean);
-        if (assumFile) {
-          const assumJson = JSON.parse(await assumFile.async("string"));
-          if (assumJson.fy_start) {
-            const startMonth = parseInt(assumJson.fy_start.split("-")[1], 10);
-            if (startMonth >= 1 && startMonth <= 12) {
-              setFyStartMonth(startMonth);
-            }
-          }
-          if (assumJson.budget_rates) {
-            setBudgetRates(assumJson.budget_rates);
-          }
-          if (assumJson.rate_thresholds) {
-            setThresholdRates(assumJson.rate_thresholds);
-          }
-        }
-      } catch {
-        // Non-fatal: keep existing fyStartMonth
-      }
+      await loadZipResults(blob);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1481,6 +1661,7 @@ export default function ForecastPage() {
     : null;
 
   return (
+    <>
     <main className="container">
       {!session?.user && (
         <div
@@ -1786,18 +1967,22 @@ export default function ForecastPage() {
 
           <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
             {zipDownloadUrl && (
-              <a href={zipDownloadUrl} download="rate_pack_output.zip">
-                <button style={{ width: "100%" }} disabled={running}>
-                  Download output ZIP
-                </button>
-              </a>
+              <button
+                style={{ width: "100%" }}
+                disabled={running}
+                onClick={() => { const a = document.createElement("a"); a.href = zipDownloadUrl; a.download = "rate_pack_output.zip"; a.click(); }}
+              >
+                Download output ZIP
+              </button>
             )}
             {excelDownloadUrl && (
-              <a href={excelDownloadUrl} download="rate_pack.xlsx">
-                <button style={{ width: "100%" }} disabled={running}>
-                  Download rate_pack.xlsx
-                </button>
-              </a>
+              <button
+                style={{ width: "100%" }}
+                disabled={running}
+                onClick={() => { const a = document.createElement("a"); a.href = excelDownloadUrl; a.download = "rate_pack.xlsx"; a.click(); }}
+              >
+                Download rate_pack.xlsx
+              </button>
             )}
           </div>
         </section>
@@ -1915,7 +2100,7 @@ export default function ForecastPage() {
           <section className="card">
             <h2 style={{ marginTop: 0 }}>Forecast History</h2>
             <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
-              Past runs are saved automatically. Click download to retrieve a previous output.
+              Past runs are saved automatically. <strong>Load</strong> restores results into the view above; <strong>Download</strong> saves the ZIP to disk.
             </div>
             <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 10, marginBottom: 10 }}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Compare runs</div>
@@ -1963,6 +2148,26 @@ export default function ForecastPage() {
                       <td className="px-3 py-2 text-right font-mono">{run.run_rate_months}</td>
                       <td className="px-3 py-2 text-right font-mono">{run.zip_size ? (run.zip_size / 1024).toFixed(0) + " KB" : "—"}</td>
                       <td className="px-3 py-2 text-right">
+                        <button
+                          style={{ fontSize: 11, padding: "2px 8px", marginRight: 4 }}
+                          aria-label={`Load forecast run ${run.id} into view`}
+                          disabled={loadingRunId === run.id}
+                          onClick={async () => {
+                            try {
+                              setLoadingRunId(run.id);
+                              setError(null);
+                              const blob = await downloadForecastRun(run.id);
+                              await loadZipResults(blob);
+                              window.scrollTo({ top: 0, behavior: "smooth" });
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : String(e));
+                            } finally {
+                              setLoadingRunId(null);
+                            }
+                          }}
+                        >
+                          {loadingRunId === run.id ? "Loading…" : "Load"}
+                        </button>
                         <button
                           style={{ fontSize: 11, padding: "2px 8px", marginRight: 4 }}
                           aria-label={`Download forecast run ${run.id}`}
@@ -2119,6 +2324,64 @@ export default function ForecastPage() {
       })()}
 
     </main>
+
+    {/* Navigation warning modal */}
+    {showNavWarning && (
+      <div style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <div style={{
+          background: "var(--color-sidebar, #1e1e2e)",
+          border: "1px solid var(--color-border)",
+          borderRadius: 12,
+          padding: "24px 28px",
+          maxWidth: 420,
+          width: "90%",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        }}>
+          <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>Forecast results will be lost</h3>
+          <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--color-foreground, #e2e8f0)", lineHeight: 1.5 }}>
+            Forecast results will be lost if you navigate away from this page. Download your output before continuing.
+          </p>
+          <p style={{ margin: "0 0 20px", fontSize: 12, color: "#e2e8f0", lineHeight: 1.5 }}>
+            💡 Tip: open a new browser tab to navigate elsewhere and keep your results available here.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {zipDownloadUrl && (
+              <button
+                onClick={() => { const a = document.createElement("a"); a.href = zipDownloadUrl; a.download = "rate_pack_output.zip"; a.click(); }}
+                style={{ width: "100%" }}
+              >
+                Download output ZIP first
+              </button>
+            )}
+            {excelDownloadUrl && (
+              <button
+                onClick={() => { const a = document.createElement("a"); a.href = excelDownloadUrl; a.download = "rate_pack.xlsx"; a.click(); }}
+                style={{ width: "100%" }}
+              >
+                Download rate_pack.xlsx first
+              </button>
+            )}
+            <button
+              onClick={proceedNavigation}
+              style={{ width: "100%", background: "transparent", border: "1px solid var(--color-border)", color: "var(--color-muted, #888)", marginTop: 4 }}
+            >
+              Leave anyway (results will be lost)
+            </button>
+            <button
+              onClick={cancelNavigation}
+              style={{ width: "100%", background: "var(--color-primary, #3b82f6)", color: "#fff", border: "none" }}
+            >
+              Stay on page
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

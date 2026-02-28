@@ -251,25 +251,25 @@ def get_user_storage_bytes(conn: psycopg2.extensions.connection, user_id: str) -
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COALESCE(SUM(octet_length(fr.output_zip)), 0)
+            SELECT COALESCE(SUM(octet_length(fr.output_zip)), 0) AS total
             FROM forecast_runs fr
             JOIN fiscal_years fy ON fr.fiscal_year_id = fy.id
             WHERE fy.user_id = %s
             """,
             (user_id,),
         )
-        run_bytes = cur.fetchone()[0] or 0
+        run_bytes = (cur.fetchone() or {}).get("total") or 0
 
         cur.execute(
             """
-            SELECT COALESCE(SUM(uf.size_bytes), 0)
+            SELECT COALESCE(SUM(uf.size_bytes), 0) AS total
             FROM uploaded_files uf
             JOIN fiscal_years fy ON uf.fiscal_year_id = fy.id
             WHERE fy.user_id = %s
             """,
             (user_id,),
         )
-        file_bytes = cur.fetchone()[0] or 0
+        file_bytes = (cur.fetchone() or {}).get("total") or 0
 
     return int(run_bytes) + int(file_bytes)
 

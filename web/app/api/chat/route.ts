@@ -14,7 +14,9 @@ Key concepts:
   - G&A$ = ($150K + $25K + $12.5K) × 15% = $28.125K
   - LoadedCost$ = $150K + $25K + $12.5K + $28.125K = $215.625K
 
-Answer questions about rate calculations, pool structures, scenario impacts, and forecast methodology. Keep answers concise and specific to government contracting indirect rates.`;
+Answer questions about rate calculations, pool structures, scenario impacts, and forecast methodology. Keep answers concise and specific to government contracting indirect rates.
+
+`;
 
 interface ChatMessage {
   role: "user" | "assistant";

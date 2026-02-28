@@ -1733,11 +1733,13 @@ def get_storage_usage(request: Request):
     conn = _conn()
     try:
         used = db.get_user_storage_bytes(conn, user_id)
+        max_bytes = db.MAX_STORAGE_BYTES
         return {
             "used_bytes": used,
-            "max_bytes": db.MAX_STORAGE_BYTES,
+            "max_bytes": max_bytes,
             "used_mb": round(used / 1024 / 1024, 2),
-            "max_mb": db.MAX_STORAGE_BYTES // 1024 // 1024,
+            "max_mb": max_bytes // 1024 // 1024,
+            "pct_used": round(used / max_bytes * 100, 2) if max_bytes else 0,
         }
     finally:
         conn.close()
