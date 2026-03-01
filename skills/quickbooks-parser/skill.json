@@ -1,0 +1,65 @@
+{
+  "name": "quickbooks-parser",
+  "version": "1.0.0",
+  "description": "Parse QuickBooks Desktop and QuickBooks Online trial balance / TB exports into GL_Actuals format",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Parse QuickBooks Trial Balance reports (Desktop and Online)",
+    "Parse QuickBooks Balance Sheet and P&L exports",
+    "Extract account codes from parenthetical format: 'Accounts Payable (2000)'",
+    "Convert comma-formatted numbers: '-52,850.00' → -52850",
+    "Convert parenthetical negatives: '(1,234.56)' → -1234.56",
+    "Convert US date format MM/DD/YYYY to YYYY-MM period",
+    "Skip subtotal, total, and blank rows automatically",
+    "Map QuickBooks Class / Location to entity field",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV content from QuickBooks export",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM period when CSV has no per-row date, e.g. '2024-10'",
+      "entityCode": "string (optional) - Entity/division code if not in the file",
+      "classAsEntity": "boolean (optional) - Use 'Class' or 'Location' column as entity code (default true)"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[] - Parsed rows in canonical format",
+    "warnings": "string[] - Parsing warnings",
+    "metadata": {
+      "rowsExtracted": "number",
+      "formatConfidence": "number - 0-1",
+      "transformationsApplied": "string[]",
+      "system": "'quickbooks'"
+    }
+  },
+  "systemSpecifics": {
+    "accountFormat": "Parenthetical: 'Account Name (Code)' — or plain numeric/alphanumeric code",
+    "numberFormat": "US comma-separated '-1,234.56'; parentheses for negatives '(1,234.56)'",
+    "dateFormat": "MM/DD/YYYY; period often in report header not per row",
+    "signConvention": "Standard: expense debit balance = positive; liability/equity credit = negative",
+    "commonHeaders": {
+      "trialBalance": ["Account", "Debit", "Credit", "Balance"],
+      "balanceSheet": ["Account", "Balance", "As of"],
+      "pAndL": ["Account", "Amount", "Jan", "Feb", "Total"]
+    },
+    "specialRows": ["Total", "TOTAL", "Net Income", "Grand Total"],
+    "negativeConventions": ["parentheses", "leading minus sign"]
+  },
+  "examples": [
+    {
+      "description": "Parse QB Trial Balance with Debit/Credit columns",
+      "input": {
+        "csvContent": "Account,Debit,Credit\n\"Salaries Expense (6000)\",\"85,000.00\",\nAccounts Payable,,\"52,850.00\"",
+        "options": { "defaultPeriod": "2024-10" }
+      },
+      "output": {
+        "data": [
+          { "period": "2024-10", "account": "6000", "amount": 85000 },
+          { "period": "2024-10", "account": "Accounts Payable", "amount": -52850 }
+        ]
+      }
+    }
+  ]
+}

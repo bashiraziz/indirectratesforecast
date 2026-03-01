@@ -1,0 +1,65 @@
+{
+  "name": "netsuite-parser",
+  "version": "1.0.0",
+  "description": "Parse Oracle NetSuite trial balance and GL exports into GL_Actuals format",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Parse NetSuite Trial Balance reports (standard and custom)",
+    "Parse NetSuite GL Detail and Summary exports",
+    "Handle multiple account code formats: '2000 Accounts Payable', 'AP-2000', 'Accounts Payable (2000)'",
+    "Prioritize 'Amount (Base Currency)' for multi-currency consolidated reporting",
+    "Aggregate multi-dimensional rows (Department, Location, Subsidiary, Class) by account+period",
+    "Map Subsidiary column to entity field",
+    "Handle both Debit/Credit columns and single Amount/Balance column",
+    "Convert US and ISO date formats to YYYY-MM",
+    "Skip total, subtotal, and header rows automatically",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV from NetSuite export",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM fallback",
+      "entityCode": "string (optional) - Entity/subsidiary code override",
+      "aggregateDimensions": "boolean (optional) - Aggregate multi-dim rows by account+period (default true)",
+      "subsidiaryAsEntity": "boolean (optional) - Use Subsidiary column as entity (default true)"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[]",
+    "warnings": "string[]",
+    "metadata": {
+      "rowsExtracted": "number",
+      "formatConfidence": "number",
+      "transformationsApplied": "string[]",
+      "system": "'netsuite'",
+      "dimensionalRowsAggregated": "number"
+    }
+  },
+  "systemSpecifics": {
+    "accountFormat": "Multiple patterns: '2000 Accounts Payable', 'AP-2000', 'Accounts Payable (2000)', plain '2000'",
+    "numberFormat": "US comma-separated; parentheses for negatives; may have base currency and transaction currency columns",
+    "dateFormat": "MM/DD/YYYY or YYYY-MM-DD; Period column may exist separately",
+    "signConvention": "Standard: debit expense = positive, credit liability = negative",
+    "commonHeaders": {
+      "trialBalance": ["Account", "Account Name", "Period", "Amount", "Amount (Base Currency)"],
+      "glDetail": ["Date", "Name", "Account", "Debit", "Credit", "Amount"],
+      "withDimensions": ["Subsidiary", "Department", "Account", "Period", "Amount (Base Currency)"]
+    }
+  },
+  "examples": [
+    {
+      "description": "Parse NetSuite Trial Balance with dimensional aggregation",
+      "input": {
+        "csvContent": "Subsidiary,Department,Account,Period,Amount (Base Currency)\nUS Corp,Sales,6000 Salaries Expense,10/2024,\"45,000.00\"\nUS Corp,Engineering,6000 Salaries Expense,10/2024,\"40,000.00\"",
+        "options": { "aggregateDimensions": true }
+      },
+      "output": {
+        "data": [
+          { "period": "2024-10", "account": "6000", "amount": 85000, "entity": "US Corp" }
+        ]
+      }
+    }
+  ]
+}

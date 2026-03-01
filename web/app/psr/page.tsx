@@ -6,17 +6,17 @@ import {
   ChevronRight,
   Plus,
   Loader2,
-  X,
   Save,
 } from "lucide-react";
 import {
-  listFiscalYears,
   listRevenue,
   listScenarios,
   upsertRevenue,
   importRevenue,
 } from "@/lib/api";
 import type { FiscalYear, RevenueRow, Scenario } from "@/lib/types";
+import { Dialog } from "@/app/components/Dialog";
+import { FYSelector } from "@/app/components/FYSelector";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,85 +82,6 @@ function feeClass(v: number): string {
   return "";
 }
 
-// ---------------------------------------------------------------------------
-// Dialog
-// ---------------------------------------------------------------------------
-
-function Dialog({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-sidebar border border-border rounded-lg p-5 w-full max-w-lg mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold m-0">{title}</h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// FY Selector
-// ---------------------------------------------------------------------------
-
-function FYSelector({
-  selected,
-  onSelect,
-}: {
-  selected: FiscalYear | null;
-  onSelect: (fy: FiscalYear) => void;
-}) {
-  const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);
-
-  const load = useCallback(async () => {
-    const fys = await listFiscalYears();
-    setFiscalYears(fys);
-    if (fys.length > 0 && !selected) onSelect(fys[0]);
-  }, [selected, onSelect]);
-
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
-      <select
-        className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-        value={selected?.id ?? ""}
-        onChange={(e) => {
-          const fy = fiscalYears.find((f) => f.id === Number(e.target.value));
-          if (fy) onSelect(fy);
-        }}
-      >
-        {fiscalYears.map((fy) => (
-          <option key={fy.id} value={fy.id}>
-            {fy.name} ({fy.start_month} — {fy.end_month})
-          </option>
-        ))}
-        {fiscalYears.length === 0 && <option value="">No fiscal years</option>}
-      </select>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Revenue Entry Dialog

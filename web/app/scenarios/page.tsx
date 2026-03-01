@@ -6,10 +6,8 @@ import {
   Pencil,
   Plus,
   Trash2,
-  X,
 } from "lucide-react";
 import {
-  listFiscalYears,
   listScenarios,
   createScenario,
   updateScenario,
@@ -22,83 +20,10 @@ import {
 } from "@/lib/api";
 import type { FiscalYear, Scenario, ScenarioEvent, PoolGroup } from "@/lib/types";
 import NextStepHint from "@/app/components/NextStepHint";
+import { Dialog } from "@/app/components/Dialog";
+import { FYSelector } from "@/app/components/FYSelector";
 
 const EVENT_TYPES = ["ADJUST", "WIN", "LOSE", "HIRE", "RIF", "OTHER"];
-
-// ---------------------------------------------------------------------------
-// Dialog
-// ---------------------------------------------------------------------------
-function Dialog({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
-      <div
-        className="bg-white dark:bg-card border border-border rounded-lg p-5 w-full max-w-lg mx-4 shadow-lg max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold m-0">{title}</h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-accent bg-transparent! border-none!">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// FY Selector
-// ---------------------------------------------------------------------------
-function FYSelector({
-  selected,
-  onSelect,
-}: {
-  selected: FiscalYear | null;
-  onSelect: (fy: FiscalYear) => void;
-}) {
-  const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);
-
-  const load = useCallback(async () => {
-    const fys = await listFiscalYears();
-    setFiscalYears(fys);
-    if (fys.length > 0 && !selected) onSelect(fys[0]);
-  }, [selected, onSelect]);
-
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
-      <select
-        className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-        value={selected?.id ?? ""}
-        onChange={(e) => {
-          const fy = fiscalYears.find((f) => f.id === Number(e.target.value));
-          if (fy) onSelect(fy);
-        }}
-      >
-        {fiscalYears.map((fy) => (
-          <option key={fy.id} value={fy.id}>
-            {fy.name} ({fy.start_month} — {fy.end_month})
-          </option>
-        ))}
-        {fiscalYears.length === 0 && <option value="">No fiscal years</option>}
-      </select>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Format currency
@@ -542,7 +467,7 @@ export default function ScenariosPage() {
       )}
 
       {/* Create Scenario Dialog */}
-      <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Create Scenario">
+      <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Create Scenario" size="lg" scrollable>
         <div className="flex flex-col gap-3">
           <div>
             <label className="text-xs">Name</label>
@@ -569,7 +494,7 @@ export default function ScenariosPage() {
       </Dialog>
 
       {/* Edit Scenario Dialog */}
-      <Dialog open={!!editingScenario} onClose={() => setEditingScenario(null)} title="Edit Scenario">
+      <Dialog open={!!editingScenario} onClose={() => setEditingScenario(null)} title="Edit Scenario" size="lg" scrollable>
         <div className="flex flex-col gap-3">
           <div>
             <label className="text-xs">Name</label>
@@ -584,7 +509,7 @@ export default function ScenariosPage() {
       </Dialog>
 
       {/* Add Event Dialog */}
-      <Dialog open={showAddEvent} onClose={() => setShowAddEvent(false)} title="Add Scenario Event">
+      <Dialog open={showAddEvent} onClose={() => setShowAddEvent(false)} title="Add Scenario Event" size="lg" scrollable>
         <EventForm
           poolGroups={poolGroups}
           onSave={handleCreateEvent}
@@ -593,7 +518,7 @@ export default function ScenariosPage() {
       </Dialog>
 
       {/* Edit Event Dialog */}
-      <Dialog open={!!editingEvent} onClose={() => setEditingEvent(null)} title="Edit Scenario Event">
+      <Dialog open={!!editingEvent} onClose={() => setEditingEvent(null)} title="Edit Scenario Event" size="lg" scrollable>
         {editingEvent && (
           <EventForm
             initial={editingEvent}

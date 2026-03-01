@@ -54,8 +54,6 @@ const SECTIONS: { key: SectionKey; label: string; items: NavItem[] }[] = [
     items: [
       { href: "/gl-ledger", label: "GL Ledger", icon: TableProperties },
       { href: "/direct-costs", label: "Direct Costs", icon: Receipt },
-      { href: "/mappings", label: "Account Map", icon: Tags },
-      { href: "/chart-of-accounts", label: "COA", icon: BookOpen },
       { href: "/forecast", label: "Forecast", icon: LayoutDashboard },
       { href: "/rates", label: "Rates", icon: Calculator },
       { href: "/psr", label: "PSR", icon: BarChart3 },
@@ -131,7 +129,7 @@ function NavSection({
     <>
       <button
         onClick={onToggle}
-        className="flex items-center justify-between w-full px-3 pt-4 pb-1 bg-transparent! border-none! text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 select-none hover:text-sidebar-foreground/60 transition-colors cursor-pointer"
+        className="flex items-center justify-between w-full px-3 pt-4 pb-1 bg-transparent! border-none! text-inherit! text-[10px] font-semibold uppercase tracking-widest opacity-60 hover:opacity-80 select-none transition-opacity cursor-pointer"
       >
         {label}
         <ChevronDown
@@ -244,7 +242,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {!collapsed && (
               <button
                 onClick={collapseAll}
-                className="flex items-center gap-2 w-full px-3 py-1.5 mt-1 rounded-md text-[11px] bg-transparent! border-none! text-sidebar-foreground/40 hover:text-sidebar-foreground/60 hover:bg-sidebar-accent/50 transition-colors cursor-pointer"
+                className="flex items-center gap-2 w-full px-3 py-1.5 mt-1 rounded-md text-[11px] bg-transparent! border-none! text-inherit! opacity-50 hover:opacity-75 hover:bg-sidebar-accent/50 transition-opacity cursor-pointer"
                 title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
               >
                 <ChevronsDownUp className="w-3.5 h-3.5" />

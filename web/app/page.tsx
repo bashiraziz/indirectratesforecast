@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import { ChatPanel } from "./components/ChatPanel";
+import { InlineNotice } from "./components/InlineNotice";
 import {
   seedTestData,
   clearTestData,
@@ -119,20 +120,14 @@ function FYCard({ fy }: { fy: FYSummary }) {
       )}
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <Link href={`/forecast?fy=${fy.id}`}>
-          <button className="btn btn-primary" style={{ fontSize: 12, padding: "4px 12px", display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <Play className="w-3 h-3" /> Forecast
-          </button>
+        <Link href={`/forecast?fy=${fy.id}`} className="btn btn-primary no-underline inline-flex items-center gap-1" style={{ fontSize: 12, padding: "4px 12px" }}>
+          <Play className="w-3 h-3" /> Forecast
         </Link>
-        <Link href={`/rates?fy=${fy.id}`}>
-          <button className="btn btn-outline" style={{ fontSize: 12, padding: "4px 12px", display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <Calculator className="w-3 h-3" /> Rates
-          </button>
+        <Link href={`/rates?fy=${fy.id}`} className="btn btn-outline no-underline inline-flex items-center gap-1" style={{ fontSize: 12, padding: "4px 12px" }}>
+          <Calculator className="w-3 h-3" /> Rates
         </Link>
-        <Link href={`/psr?fy=${fy.id}`}>
-          <button className="btn btn-outline" style={{ fontSize: 12, padding: "4px 12px", display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <BarChart3 className="w-3 h-3" /> PSR
-          </button>
+        <Link href={`/psr?fy=${fy.id}`} className="btn btn-outline no-underline inline-flex items-center gap-1" style={{ fontSize: 12, padding: "4px 12px" }}>
+          <BarChart3 className="w-3 h-3" /> PSR
         </Link>
       </div>
     </div>
@@ -235,6 +230,28 @@ export default function HomePage() {
   const [setupExpanded, setSetupExpanded] = useState(true);
   const chatRef = useRef<HTMLDivElement>(null);
   const [storageUsage, setStorageUsage] = useState<{ used_mb: number; max_mb: number; pct_used: number } | null>(null);
+
+  const [howToExpanded, setHowToExpanded] = useState(true);
+
+  // Default: collapsed for authenticated users, expanded for guests
+  useEffect(() => {
+    const saved = localStorage.getItem("home-howto-expanded");
+    if (saved !== null) {
+      setHowToExpanded(saved === "true");
+    }
+  }, []);
+  useEffect(() => {
+    const saved = localStorage.getItem("home-howto-expanded");
+    if (saved === null) {
+      setHowToExpanded(!session?.user);
+    }
+  }, [session?.user]);
+
+  function toggleHowTo() {
+    const next = !howToExpanded;
+    setHowToExpanded(next);
+    try { localStorage.setItem("home-howto-expanded", String(next)); } catch {}
+  }
 
   const [seedMsg, setSeedMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [seeding, setSeeding] = useState(false);
@@ -497,13 +514,16 @@ export default function HomePage() {
   return (
     <main className="container" style={{ maxWidth: 960 }}>
       {/* Header */}
-      <div style={{ textAlign: "center", padding: "40px 0 24px" }}>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-          <FileSpreadsheet className="w-10 h-10 text-primary" />
+      <div style={{ textAlign: "center", padding: "48px 0 28px" }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+          <FileSpreadsheet className="w-11 h-11 text-primary" />
         </div>
-        <h1 style={{ margin: "0 0 4px", fontSize: 26 }}>IndirectRates</h1>
-        <p className="muted" style={{ fontSize: 14, margin: 0 }}>
-          Indirect rates forecasting &mdash; Fringe, Overhead, and G&amp;A &mdash; built for auditability.
+        <h1 style={{ margin: "0 0 10px", fontSize: 32, fontWeight: 700, letterSpacing: "-0.5px", lineHeight: 1.15 }}>
+          Forecast indirect rates.<br />Stay audit-ready.
+        </h1>
+        <p style={{ fontSize: 15, margin: "0 auto", maxWidth: 480, lineHeight: 1.6, color: "var(--color-muted-foreground)" }}>
+          Monthly Fringe, Overhead, and G&amp;A projections with scenario modeling.
+          Every rate backed by pool&nbsp;÷&nbsp;base math — built for DCAA auditability.
         </p>
       </div>
 
@@ -555,12 +575,8 @@ export default function HomePage() {
             This deployment requires authentication before dashboard data can be loaded.
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-            <a href="/try-demo">
-              <button className="btn btn-outline">Try Demo</button>
-            </a>
-            <a href="/auth/signin">
-              <button className="btn btn-primary">Continue to sign in</button>
-            </a>
+            <Link href="/try-demo" className="btn btn-outline no-underline">Try Demo</Link>
+            <Link href="/auth/signin" className="btn btn-primary no-underline">Continue to sign in</Link>
           </div>
         </section>
       )}
@@ -589,71 +605,91 @@ export default function HomePage() {
       )}
 
       <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
-        <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>How To Use IndirectRates</h2>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
-          Choose the path that fits your goal: quick evaluation or full saved workspace.
-        </div>
-
-        <div
+        <button
+          onClick={toggleHowTo}
           style={{
-            display: "grid",
-            gap: 12,
-            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-            marginBottom: 12,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            padding: 0,
+            color: "inherit",
+            fontSize: 16,
+            fontWeight: 600,
+            textAlign: "left",
           }}
         >
-          <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Guest Walkthrough (Try Demo)</h3>
-            <ol style={{ margin: 0, paddingLeft: 18 }}>
-              {guestWalkthrough.map((step) => (
-                <li key={step.title} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{step.detail}</div>
-                  <Link href={step.href}>
-                    <button className="btn btn-outline" style={{ fontSize: 11, padding: "2px 8px" }}>{step.cta}</button>
-                  </Link>
-                </li>
-              ))}
-            </ol>
-          </div>
+          <span>How To Use IndirectRates</span>
+          {howToExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
 
-          <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Registered Walkthrough</h3>
-            <ol style={{ margin: 0, paddingLeft: 18 }}>
-              {registeredWalkthrough.map((step) => (
-                <li key={step.title} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{step.detail}</div>
-                  <Link href={step.href}>
-                    <button className="btn btn-outline" style={{ fontSize: 11, padding: "2px 8px" }}>{step.cta}</button>
-                  </Link>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </div>
+        {howToExpanded && (
+          <>
+            <div className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+              Choose the path that fits your goal: quick evaluation or full saved workspace.
+            </div>
 
-        <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Guest vs Registered Access</h3>
-        <div style={{ overflowX: "auto" }}>
-          <table className="data-table" style={{ width: "100%", fontSize: 12 }}>
-            <thead>
-              <tr>
-                <th>Capability</th>
-                <th>Guest</th>
-                <th>Registered</th>
-              </tr>
-            </thead>
-            <tbody>
-              {accessRows.map((row) => (
-                <tr key={row.feature}>
-                  <td>{row.feature}</td>
-                  <td>{row.guest}</td>
-                  <td>{row.registered}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                marginBottom: 12,
+              }}
+            >
+              <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}>
+                <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Guest Walkthrough (Try Demo)</h3>
+                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                  {guestWalkthrough.map((step) => (
+                    <li key={step.title} style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{step.detail}</div>
+                      <Link href={step.href} className="btn btn-outline no-underline" style={{ fontSize: 11, padding: "2px 8px" }}>{step.cta}</Link>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 12 }}>
+                <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Registered Walkthrough</h3>
+                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                  {registeredWalkthrough.map((step) => (
+                    <li key={step.title} style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{step.detail}</div>
+                      <Link href={step.href} className="btn btn-outline no-underline" style={{ fontSize: 11, padding: "2px 8px" }}>{step.cta}</Link>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+
+            <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Guest vs Registered Access</h3>
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table" style={{ width: "100%", fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th>Capability</th>
+                    <th>Guest</th>
+                    <th>Registered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accessRows.map((row) => (
+                    <tr key={row.feature}>
+                      <td>{row.feature}</td>
+                      <td>{row.guest}</td>
+                      <td>{row.registered}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </section>
 
       {!loading && dashboard && (
@@ -681,13 +717,11 @@ export default function HomePage() {
           ) : (
             <section className="card" style={{ marginBottom: 16, padding: 32, textAlign: "center" }}>
               <Database className="w-8 h-8 text-primary" style={{ margin: "0 auto 12px" }} />
-              <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Get Started</h2>
+              <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Nothing here yet</h2>
               <p className="muted" style={{ fontSize: 13, margin: "0 0 16px", maxWidth: 400, marginLeft: "auto", marginRight: "auto" }}>
-                No fiscal years configured yet. Load sample data below or create a fiscal year to begin.
+                Create a fiscal year to start forecasting, or load the demo dataset to explore the app right away.
               </p>
-              <Link href="/fiscal-years">
-                <button className="btn btn-primary">Create Fiscal Year</button>
-              </Link>
+              <Link href="/fiscal-years" className="btn btn-primary no-underline">Create Fiscal Year</Link>
             </section>
           )}
 
@@ -696,9 +730,11 @@ export default function HomePage() {
 
           {/* Guided setup */}
           <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
-            <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>Guided Setup</h2>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
-              {completedSetupSteps}/{setupSteps.length} steps complete
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 16 }}>Setup Checklist</h2>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {completedSetupSteps}/{setupSteps.length} done
+              </span>
             </div>
             <div style={{ display: "grid", gap: 8 }}>
               {setupSteps.map((step) => (
@@ -774,16 +810,7 @@ export default function HomePage() {
                       {clearing ? "Clearing..." : "Clear"}
                     </button>
                   </div>
-                  {seedMsg && (
-                    <div style={{
-                      marginTop: 8, padding: "6px 10px", borderRadius: 6, fontSize: 12,
-                      backgroundColor: seedMsg.type === "success" ? "var(--color-success-bg, #e6f9e6)" : "var(--color-error-bg, #fde8e8)",
-                      color: seedMsg.type === "success" ? "var(--color-success, #166534)" : "var(--color-error, #991b1b)",
-                      border: `1px solid ${seedMsg.type === "success" ? "var(--color-success-border, #bbf7d0)" : "var(--color-error-border, #fecaca)"}`,
-                    }}>
-                      {seedMsg.text}
-                    </div>
-                  )}
+                  <InlineNotice msg={seedMsg} />
                 </div>
 
                 {/* Demo Data */}
@@ -802,16 +829,7 @@ export default function HomePage() {
                       {clearingDemo ? "Clearing..." : "Clear"}
                     </button>
                   </div>
-                  {demoMsg && (
-                    <div style={{
-                      marginTop: 8, padding: "6px 10px", borderRadius: 6, fontSize: 12,
-                      backgroundColor: demoMsg.type === "success" ? "var(--color-success-bg, #e6f9e6)" : "var(--color-error-bg, #fde8e8)",
-                      color: demoMsg.type === "success" ? "var(--color-success, #166534)" : "var(--color-error, #991b1b)",
-                      border: `1px solid ${demoMsg.type === "success" ? "var(--color-success-border, #bbf7d0)" : "var(--color-error-border, #fecaca)"}`,
-                    }}>
-                      {demoMsg.text}
-                    </div>
-                  )}
+                  <InlineNotice msg={demoMsg} />
                 </div>
               </div>
             )}

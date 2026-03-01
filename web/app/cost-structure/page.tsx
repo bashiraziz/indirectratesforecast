@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  listFiscalYears,
   listRateGroups,
   listPoolGroupsByRateGroup,
   listPoolGroups,
@@ -19,49 +18,7 @@ import type {
   BaseAccount,
 } from "@/lib/types";
 import NextStepHint from "@/app/components/NextStepHint";
-
-function FYSelector({
-  selected,
-  onSelect,
-}: {
-  selected: FiscalYear | null;
-  onSelect: (fy: FiscalYear) => void;
-}) {
-  const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);
-
-  const load = useCallback(async () => {
-    const fys = await listFiscalYears();
-    setFiscalYears(fys);
-    if (fys.length > 0 && !selected) {
-      onSelect(fys[0]);
-    }
-  }, [selected, onSelect]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  return (
-    <div className="flex items-center gap-3">
-      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
-      <select
-        className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-        value={selected?.id ?? ""}
-        onChange={(e) => {
-          const fy = fiscalYears.find((f) => f.id === Number(e.target.value));
-          if (fy) onSelect(fy);
-        }}
-      >
-        {fiscalYears.map((fy) => (
-          <option key={fy.id} value={fy.id}>
-            {fy.name} ({fy.start_month} — {fy.end_month})
-          </option>
-        ))}
-        {fiscalYears.length === 0 && <option value="">No fiscal years</option>}
-      </select>
-    </div>
-  );
-}
+import { FYSelector } from "@/app/components/FYSelector";
 
 interface PoolGroupDetail {
   poolGroup: PoolGroup;

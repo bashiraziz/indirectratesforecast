@@ -1,0 +1,58 @@
+{
+  "name": "costpoint-parser",
+  "version": "1.0.0",
+  "description": "Parse Deltek Costpoint trial balance / GL inquiry exports into GL_Actuals format",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Parse Costpoint Trial Balance and GL Inquiry reports",
+    "Handle separate Debit and Credit columns (Costpoint credits are POSITIVE — see sign convention)",
+    "Compute net amount as Debit - Credit for each account",
+    "Combine Fiscal_Year + Period (1-12) into YYYY-MM",
+    "Map Org / Organization column to entity field",
+    "Skip total, sub-total, and header rows automatically",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV content from Costpoint export",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM fallback when no period column found",
+      "entityCode": "string (optional) - Entity code override"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[]",
+    "warnings": "string[]",
+    "metadata": {
+      "rowsExtracted": "number",
+      "formatConfidence": "number",
+      "transformationsApplied": "string[]",
+      "system": "'costpoint'"
+    }
+  },
+  "systemSpecifics": {
+    "accountFormat": "Plain numeric or dotted: '6000', '6000.01', '6096.01'",
+    "numberFormat": "Plain numeric with optional commas; credits shown as POSITIVE values",
+    "dateFormat": "Fiscal_Year (e.g. '2024') + Accounting_Period (1-12) in separate columns; or YYYY-MM combined",
+    "signConvention": "CRITICAL: Costpoint shows credit entries as POSITIVE. Net = Debit - Credit. For expense accounts (debit-normal), net is positive. For liability accounts (credit-normal), net is negative.",
+    "commonHeaders": {
+      "trialBalance": ["Account Number", "Account Name", "Fiscal_Year", "Accounting_Period", "Debit", "Credit"],
+      "glInquiry": ["Org", "Account", "Year", "Period", "Debit Amount", "Credit Amount", "Net Amount"]
+    }
+  },
+  "examples": [
+    {
+      "description": "Parse Costpoint GL with separate Fiscal Year and Period columns",
+      "input": {
+        "csvContent": "Org,Account Number,Account Name,Fiscal_Year,Accounting_Period,Debit,Credit\nHQ,6000,Salaries,2024,10,85000.00,0.00\nHQ,6100,Rent,2024,10,12000.00,0.00"
+      },
+      "output": {
+        "data": [
+          { "period": "2024-10", "account": "6000", "amount": 85000, "entity": "HQ" },
+          { "period": "2024-10", "account": "6100", "amount": 12000, "entity": "HQ" }
+        ]
+      }
+    }
+  ]
+}

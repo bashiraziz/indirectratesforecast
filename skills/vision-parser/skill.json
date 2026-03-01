@@ -1,0 +1,62 @@
+{
+  "name": "vision-parser",
+  "version": "1.0.0",
+  "description": "Parse Deltek Vision / Vantagepoint trial balance and GL detail exports into GL_Actuals format",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Parse Deltek Vision and Vantagepoint Trial Balance reports",
+    "Parse Vision GL Account Summary and GL Detail exports",
+    "Handle separate Debit Amount / Credit Amount columns",
+    "Handle single Balance or Net Change column",
+    "Convert MM/DD/YYYY or YYYY-MM dates to YYYY-MM period",
+    "Parse comma-formatted numbers and parenthetical negatives",
+    "Map Company / Organization column to entity field",
+    "Skip total, subtotal, and header rows automatically",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV from Deltek Vision/Vantagepoint export",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM fallback",
+      "entityCode": "string (optional) - Entity code override",
+      "useBalance": "boolean (optional) - Use Balance column instead of Debit-Credit net (default false)"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[]",
+    "warnings": "string[]",
+    "metadata": {
+      "rowsExtracted": "number",
+      "formatConfidence": "number",
+      "transformationsApplied": "string[]",
+      "system": "'vision'"
+    }
+  },
+  "systemSpecifics": {
+    "accountFormat": "Numeric or dotted: '6000', '6000.01'; may be prefixed with org code",
+    "numberFormat": "US comma-separated; parentheses for credit balances in some reports",
+    "dateFormat": "MM/DD/YYYY or YYYY-MM; 'Period' column often contains MM/YYYY",
+    "signConvention": "Standard: expense debit = positive, revenue/liability credit = negative. Parenthetical amounts are negative.",
+    "commonHeaders": {
+      "trialBalance": ["Account", "Account Description", "Period", "Debit Amount", "Credit Amount", "Balance"],
+      "glSummary": ["Company", "Account Number", "Description", "Month", "Debit", "Credit", "Net"],
+      "vantagepoint": ["GL Account", "Account Name", "Fiscal Period", "Dr Amount", "Cr Amount", "Ending Balance"]
+    }
+  },
+  "examples": [
+    {
+      "description": "Parse Vision Trial Balance with Debit/Credit columns",
+      "input": {
+        "csvContent": "Company,Account,Account Description,Period,Debit Amount,Credit Amount\n001,6000,Salaries,10/2024,\"85,000.00\",0.00\n001,6100,Rent Expense,10/2024,\"12,000.00\",0.00"
+      },
+      "output": {
+        "data": [
+          { "period": "2024-10", "account": "6000", "amount": 85000, "entity": "001" },
+          { "period": "2024-10", "account": "6100", "amount": 12000, "entity": "001" }
+        ]
+      }
+    }
+  ]
+}

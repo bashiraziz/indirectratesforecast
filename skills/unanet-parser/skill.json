@@ -1,0 +1,63 @@
+{
+  "name": "unanet-parser",
+  "version": "1.0.0",
+  "description": "Parse Unanet (and Deltek Unanet) trial balance / GL summary exports into GL_Actuals format",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Parse Unanet Trial Balance reports (monthly and YTD)",
+    "Parse Unanet GL Account Summary exports",
+    "Handle separate Debits / Credits columns and compute net",
+    "Handle single Ending Balance or Net Change column",
+    "Handle period numbers (1-12) combined with fiscal year column",
+    "Map Organization / Company column to entity field",
+    "Skip Total and header rows automatically",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV content from Unanet export",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM period when no date column present",
+      "entityCode": "string (optional) - Entity code override",
+      "fiscalYearStart": "number (optional) - Fiscal year start month (1-12, default 1 = January)",
+      "useNetChange": "boolean (optional) - Use 'Net Change' column instead of Ending Balance (default false)"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[] - Parsed rows",
+    "warnings": "string[]",
+    "metadata": {
+      "rowsExtracted": "number",
+      "formatConfidence": "number",
+      "transformationsApplied": "string[]",
+      "system": "'unanet'"
+    }
+  },
+  "systemSpecifics": {
+    "accountFormat": "Plain numeric or alphanumeric: '6000', '6000.01', 'E-LAB'",
+    "numberFormat": "US comma-separated; parentheses or leading minus for negatives",
+    "dateFormat": "Period column may be month name ('October'), month number ('10'), or YYYY-MM; Year in separate column",
+    "signConvention": "Standard: expense debit = positive, liability credit = negative",
+    "commonHeaders": {
+      "trialBalance": ["Account Number", "Account Name", "Beginning Balance", "Debits", "Credits", "Ending Balance"],
+      "glSummary": ["Account", "Description", "Period", "Debit", "Credit", "Net Change"],
+      "withOrg": ["Organization", "Account", "Period", "Debit", "Credit"]
+    }
+  },
+  "examples": [
+    {
+      "description": "Parse Unanet Trial Balance with Debits/Credits columns",
+      "input": {
+        "csvContent": "Organization,Account Number,Account Name,Period,Year,Debits,Credits,Ending Balance\nHQ,6000,Salaries,10,2024,\"85,000.00\",0.00,\"85,000.00\"\nHQ,6100,Rent,10,2024,\"12,000.00\",0.00,\"12,000.00\"",
+        "options": {}
+      },
+      "output": {
+        "data": [
+          { "period": "2024-10", "account": "6000", "amount": 85000, "entity": "HQ" },
+          { "period": "2024-10", "account": "6100", "amount": 12000, "entity": "HQ" }
+        ]
+      }
+    }
+  ]
+}

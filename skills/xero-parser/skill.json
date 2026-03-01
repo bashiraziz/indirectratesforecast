@@ -1,0 +1,61 @@
+{
+  "name": "xero-parser",
+  "version": "1.0.0",
+  "description": "Parse Xero trial balance CSV exports into GL_Actuals format for indirect rate forecasting",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Parse Xero Trial Balance exports (YTD Debit / YTD Credit columns)",
+    "Parse Xero Account Transactions summary exports",
+    "Extract account codes from 'Code' or 'Account Code' column",
+    "Convert YTD Debit/Credit to net amount (Debit - Credit)",
+    "Convert DD/MM/YYYY or ISO dates to YYYY-MM period",
+    "Parse comma-formatted numbers and parenthetical negatives",
+    "Skip subtotal and header rows automatically",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV content from Xero export",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM period to use when the CSV has no per-row date, e.g. '2024-10'",
+      "entityCode": "string (optional) - Entity/division code to tag all rows if Xero doesn't include one",
+      "useEndingBalance": "boolean (optional) - If true, uses the Closing Balance column instead of Debit-Credit net (default false)"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[] - Parsed rows in canonical format",
+    "warnings": "string[] - Parsing warnings (low confidence, skipped rows, missing period)",
+    "metadata": {
+      "rowsExtracted": "number - Count of data rows successfully parsed",
+      "formatConfidence": "number - Confidence this is Xero format (0-1)",
+      "transformationsApplied": "string[] - List of transformations performed",
+      "system": "string - 'xero'"
+    }
+  },
+  "systemSpecifics": {
+    "accountFormat": "Numeric or alphanumeric code in 'Account Code' or 'Code' column: '200', '310', 'ACC01'",
+    "numberFormat": "Comma-separated: '52,850.00'; parentheses for negative: '(1,234.56)'",
+    "dateFormat": "DD/MM/YYYY or ISO YYYY-MM-DD; period often in report header not per-row",
+    "signConvention": "Standard: expense debit balance = positive, liability credit balance = negative",
+    "commonHeaders": {
+      "trialBalance": ["Account Code", "Account Name", "YTD Debit", "YTD Credit", "Balance"],
+      "accountTransactions": ["Date", "Source", "Reference", "Description", "Net", "Tax", "Gross", "Balance"]
+    }
+  },
+  "examples": [
+    {
+      "description": "Parse Xero Trial Balance with YTD Debit/Credit columns",
+      "input": {
+        "csvContent": "Account Code,Account Name,YTD Debit,YTD Credit,Balance\n200,Sales,,\"125,000.00\",\"-125,000.00\"\n6000,Salaries,\"85,000.00\",,\"85,000.00\"",
+        "options": { "defaultPeriod": "2024-10" }
+      },
+      "output": {
+        "data": [
+          { "period": "2024-10", "account": "200", "amount": -125000 },
+          { "period": "2024-10", "account": "6000", "amount": 85000 }
+        ]
+      }
+    }
+  ]
+}

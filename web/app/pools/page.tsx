@@ -43,6 +43,8 @@ import {
 } from "@/lib/api";
 import type { FiscalYear, RateGroup, PoolGroup, Pool, GLMapping, ChartAccount, BaseAccount } from "@/lib/types";
 import NextStepHint from "@/app/components/NextStepHint";
+import { Dialog } from "@/app/components/Dialog";
+import { FYSelector } from "@/app/components/FYSelector";
 
 interface AISuggestion {
   account: string;
@@ -50,137 +52,6 @@ interface AISuggestion {
   suggested_pool_name: string;
   is_unallowable: boolean;
   reason: string;
-}
-
-// ---------------------------------------------------------------------------
-// Small dialog component
-// ---------------------------------------------------------------------------
-function Dialog({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
-      <div
-        className="bg-white border border-border rounded-lg p-5 w-full max-w-md mx-4 shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold m-0">{title}</h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Fiscal Year Selector
-// ---------------------------------------------------------------------------
-function FYSelector({
-  selected,
-  onSelect,
-}: {
-  selected: FiscalYear | null;
-  onSelect: (fy: FiscalYear) => void;
-}) {
-  const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);
-  const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newStart, setNewStart] = useState("2024-10");
-  const [newEnd, setNewEnd] = useState("2025-09");
-
-  const load = useCallback(async () => {
-    const fys = await listFiscalYears();
-    setFiscalYears(fys);
-    if (fys.length > 0 && !selected) {
-      onSelect(fys[0]);
-    }
-  }, [selected, onSelect]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function handleCreate() {
-    if (!newName.trim()) return;
-    const fy = await createFiscalYear({
-      name: newName.trim(),
-      start_month: newStart,
-      end_month: newEnd,
-    });
-    setShowCreate(false);
-    setNewName("");
-    await load();
-    onSelect(fy as FiscalYear);
-  }
-
-  return (
-    <div className="flex items-center gap-3 mb-4">
-      <label className="text-sm font-medium opacity-100!">Fiscal Year:</label>
-      <select
-        className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-        value={selected?.id ?? ""}
-        onChange={(e) => {
-          const fy = fiscalYears.find((f) => f.id === Number(e.target.value));
-          if (fy) onSelect(fy);
-        }}
-      >
-        {fiscalYears.map((fy) => (
-          <option key={fy.id} value={fy.id}>
-            {fy.name} ({fy.start_month} — {fy.end_month})
-          </option>
-        ))}
-        {fiscalYears.length === 0 && <option value="">No fiscal years</option>}
-      </select>
-      <button
-        onClick={() => setShowCreate(true)}
-        className="bg-primary/80! text-xs px-3 py-1.5 flex items-center gap-1"
-      >
-        <Plus className="w-3 h-3" /> New FY
-      </button>
-      <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Create Fiscal Year">
-        <div className="flex flex-col gap-3">
-          <div>
-            <label className="text-xs">Name</label>
-            <input
-              className="w-full mt-1"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="FY2025"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs">Start Month</label>
-              <input className="w-full mt-1" value={newStart} onChange={(e) => setNewStart(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs">End Month</label>
-              <input className="w-full mt-1" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} />
-            </div>
-          </div>
-          <button onClick={handleCreate} className="mt-2">
-            Create
-          </button>
-        </div>
-      </Dialog>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,6 +1117,26 @@ export default function PoolSetupPage() {
   const [copyResult, setCopyResult] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
 
+  // New FY creation (lifted from FYSelector)
+  const [showCreateFY, setShowCreateFY] = useState(false);
+  const [newFYName, setNewFYName] = useState("");
+  const [newFYStart, setNewFYStart] = useState("2024-10");
+  const [newFYEnd, setNewFYEnd] = useState("2025-09");
+  const [fyRefreshKey, setFyRefreshKey] = useState(0);
+
+  async function handleCreateFY() {
+    if (!newFYName.trim()) return;
+    const fy = await createFiscalYear({
+      name: newFYName.trim(),
+      start_month: newFYStart,
+      end_month: newFYEnd,
+    });
+    setShowCreateFY(false);
+    setNewFYName("");
+    setSelectedFY(fy as FiscalYear);
+    setFyRefreshKey((k) => k + 1);
+  }
+
   const loadGroups = useCallback(async () => {
     if (!selectedFY) {
       setRateGroups([]);
@@ -1303,7 +1194,40 @@ export default function PoolSetupPage() {
         ]}
       />
 
-      <FYSelector selected={selectedFY} onSelect={setSelectedFY} />
+      <FYSelector selected={selectedFY} onSelect={setSelectedFY} refreshKey={fyRefreshKey}>
+        <button
+          onClick={() => setShowCreateFY(true)}
+          className="bg-primary/80! text-xs px-3 py-1.5 flex items-center gap-1"
+        >
+          <Plus className="w-3 h-3" /> New FY
+        </button>
+      </FYSelector>
+      <Dialog open={showCreateFY} onClose={() => setShowCreateFY(false)} title="Create Fiscal Year">
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="text-xs">Name</label>
+            <input
+              className="w-full mt-1"
+              value={newFYName}
+              onChange={(e) => setNewFYName(e.target.value)}
+              placeholder="FY2025"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs">Start Month</label>
+              <input className="w-full mt-1" value={newFYStart} onChange={(e) => setNewFYStart(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs">End Month</label>
+              <input className="w-full mt-1" value={newFYEnd} onChange={(e) => setNewFYEnd(e.target.value)} />
+            </div>
+          </div>
+          <button onClick={handleCreateFY} className="mt-2">
+            Create
+          </button>
+        </div>
+      </Dialog>
 
       {selectedFY && (
         <div>

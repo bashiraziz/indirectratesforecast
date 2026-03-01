@@ -5,39 +5,7 @@ import { Check, Plus, Trash2, X } from "lucide-react";
 import { listFiscalYears, createFiscalYear, deleteFiscalYear, copyFYSetup } from "@/lib/api";
 import type { FiscalYear } from "@/lib/types";
 import NextStepHint from "@/app/components/NextStepHint";
-
-function Dialog({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-sidebar border border-border rounded-lg p-5 w-full max-w-md mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold m-0">{title}</h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-accent bg-transparent! border-none!"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
+import { Dialog } from "@/app/components/Dialog";
 
 export default function FiscalYearsPage() {
   const [fiscalYears, setFiscalYears] = useState<FiscalYear[]>([]);

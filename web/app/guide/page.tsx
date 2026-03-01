@@ -157,9 +157,7 @@ export default function GuidePage() {
             <li key={s} style={{ marginBottom: 6 }}>{s}</li>
           ))}
         </ol>
-        <Link href="/try-demo">
-          <button className="btn btn-primary">Open Try Demo</button>
-        </Link>
+        <Link href="/try-demo" className="btn btn-primary no-underline">Open Try Demo</Link>
       </section>
 
       {/* Registered path */}
@@ -197,12 +195,8 @@ export default function GuidePage() {
           ))}
         </ol>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Link href="/auth/signin">
-            <button className="btn btn-primary">Sign In</button>
-          </Link>
-          <Link href="/">
-            <button className="btn btn-outline">Back To Home</button>
-          </Link>
+          <Link href="/auth/signin" className="btn btn-primary no-underline">Sign In</Link>
+          <Link href="/" className="btn btn-outline no-underline">Back To Home</Link>
         </div>
       </section>
 

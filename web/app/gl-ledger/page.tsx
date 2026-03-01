@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { ConfirmDialog } from "@/app/components/Dialog";
 import {
   listFiscalYears,
   listGLEntries,
@@ -15,6 +16,7 @@ import {
   type GLEntry,
 } from "@/lib/api";
 import type { FiscalYear } from "@/lib/types";
+import NextStepHint from "@/app/components/NextStepHint";
 
 const PAGE_SIZE = 100;
 
@@ -37,39 +39,6 @@ function Toast({ message, type, onClose }: { message: string; type: "success" | 
   );
 }
 
-function ConfirmDialog({
-  open,
-  title,
-  message,
-  onConfirm,
-  onCancel,
-}: {
-  open: boolean;
-  title: string;
-  message: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-sidebar border border-border rounded-lg p-5 w-full max-w-sm mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-base font-semibold mb-2">{title}</h3>
-        <p className="text-sm text-muted-foreground mb-4">{message}</p>
-        <div className="flex gap-2 justify-end">
-          <button className="btn btn-outline" onClick={onCancel}>Cancel</button>
-          <button className="btn btn-danger" onClick={onConfirm}>Delete</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 interface EditableRowProps {
   entry: GLEntry;
@@ -438,6 +407,13 @@ export default function GLLedgerPage() {
           </select>
         </div>
       </div>
+
+      <NextStepHint
+        items={[
+          { label: "Map GL accounts to pools", href: "/mappings", detail: "Assign accounts to Fringe, Overhead, or G&A pools." },
+          { label: "Run forecast", href: "/forecast", detail: "Generate rate projections once actuals are loaded." },
+        ]}
+      />
 
       {error && (
         <div className="card" style={{ color: "var(--color-destructive)", marginBottom: 8, fontSize: 13 }}>

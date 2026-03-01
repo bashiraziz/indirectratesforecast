@@ -1,0 +1,55 @@
+{
+  "name": "generic-parser",
+  "version": "1.0.0",
+  "description": "Auto-detecting trial balance parser for any accounting system — detects headers, date formats, sign conventions, and entity columns",
+  "type": "project",
+  "author": "indirectratesforecast",
+  "main": "parse.ts",
+  "capabilities": [
+    "Auto-detect account code column from common names across all systems",
+    "Auto-detect amount source: Debit+Credit columns, Balance, Net Change, or Amount",
+    "Auto-detect date format: MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD, MM/YYYY, YYYY-MM, month names",
+    "Auto-detect entity column: Organization, Company, Subsidiary, Division, Entity, Class",
+    "Handle parenthetical negatives, leading minus, or sign-neutral amounts",
+    "Skip preamble/header rows, total rows, and blank rows automatically",
+    "Report detected format in metadata for transparency",
+    "Fallback to manual overrides for any field when auto-detection fails",
+    "Output canonical Period,Account,Amount[,Entity] CSV"
+  ],
+  "input": {
+    "csvContent": "string - Raw CSV from any accounting system",
+    "options": {
+      "defaultPeriod": "string (optional) - YYYY-MM fallback when period cannot be detected",
+      "entityCode": "string (optional) - Entity code override",
+      "negativeConvention": "'parentheses' | 'minus' | 'credit_column' | 'auto' (default: 'auto')",
+      "dateFormatHint": "'mdy' | 'dmy' | 'iso' | 'auto' (default: 'auto') — hint when DD/MM vs MM/DD is ambiguous",
+      "amountColumn": "string (optional) - Header name of the preferred amount column override",
+      "accountColumn": "string (optional) - Header name of the account code column override",
+      "periodColumn": "string (optional) - Header name of the period/date column override"
+    }
+  },
+  "output": {
+    "data": "GLActualsRow[]",
+    "warnings": "string[]",
+    "metadata": {
+      "rowsExtracted": "number",
+      "formatConfidence": "number",
+      "transformationsApplied": "string[]",
+      "system": "'generic'",
+      "detectedFormat": {
+        "accountColumn": "string - which column was used",
+        "amountSource": "string - 'debit_credit' | 'balance' | 'net_change' | 'amount'",
+        "dateFormat": "string - detected date pattern",
+        "entityColumn": "string | null"
+      }
+    }
+  },
+  "systemSpecifics": {
+    "accountCandidates": ["Account", "Account Code", "Account Number", "Acct", "GL Account", "Account No", "Acct #"],
+    "amountCandidates": ["Balance", "Ending Balance", "Net Change", "Amount", "Net Amount", "YTD Balance"],
+    "debitCandidates": ["Debit", "Dr", "Debit Amount", "YTD Debit", "Debit Amount (Base Currency)"],
+    "creditCandidates": ["Credit", "Cr", "Credit Amount", "YTD Credit", "Credit Amount (Base Currency)"],
+    "entityCandidates": ["Organization", "Org", "Company", "Subsidiary", "Division", "Entity", "Class", "Location", "Department"],
+    "periodCandidates": ["Period", "Date", "Month", "As Of", "Fiscal Period", "Accounting Period", "Posting Period"]
+  }
+}
