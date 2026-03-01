@@ -2377,7 +2377,7 @@ export default function ForecastPage() {
             )}
             <button
               onClick={proceedNavigation}
-              style={{ width: "100%", background: "transparent", border: "1px solid var(--color-border)", color: "var(--color-muted, #888)", marginTop: 4 }}
+              style={{ width: "100%", background: "transparent", border: "1px solid var(--color-border)", color: "var(--color-muted-foreground)", marginTop: 4 }}
             >
               Leave anyway (results will be lost)
             </button>

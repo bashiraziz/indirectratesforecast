@@ -227,30 +227,29 @@ export default function HomePage() {
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [setupExpanded, setSetupExpanded] = useState(true);
+  const [setupExpanded, setSetupExpanded] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
   const [storageUsage, setStorageUsage] = useState<{ used_mb: number; max_mb: number; pct_used: number } | null>(null);
 
-  const [howToExpanded, setHowToExpanded] = useState(true);
+  const [howToExpanded, setHowToExpanded] = useState(false);
 
-  // Default: collapsed for authenticated users, expanded for guests
   useEffect(() => {
-    const saved = localStorage.getItem("home-howto-expanded");
-    if (saved !== null) {
-      setHowToExpanded(saved === "true");
-    }
+    const savedHowTo = localStorage.getItem("home-howto-expanded");
+    if (savedHowTo !== null) setHowToExpanded(savedHowTo === "true");
+    const savedSetup = localStorage.getItem("home-setup-expanded");
+    if (savedSetup !== null) setSetupExpanded(savedSetup === "true");
   }, []);
-  useEffect(() => {
-    const saved = localStorage.getItem("home-howto-expanded");
-    if (saved === null) {
-      setHowToExpanded(!session?.user);
-    }
-  }, [session?.user]);
 
   function toggleHowTo() {
     const next = !howToExpanded;
     setHowToExpanded(next);
     try { localStorage.setItem("home-howto-expanded", String(next)); } catch {}
+  }
+
+  function toggleSetup() {
+    const next = !setupExpanded;
+    setSetupExpanded(next);
+    try { localStorage.setItem("home-setup-expanded", String(next)); } catch {}
   }
 
   const [seedMsg, setSeedMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -474,46 +473,18 @@ export default function HomePage() {
     },
   ];
   const accessRows: AccessRow[] = [
-    {
-      feature: "Upload CSV forecast runs",
-      guest: "Yes (Try Demo)",
-      registered: "Yes",
-    },
-    {
-      feature: "Save fiscal years and setup",
-      guest: "No",
-      registered: "Yes",
-    },
-    {
-      feature: "Use DB configuration pages",
-      guest: "No",
-      registered: "Yes",
-    },
-    {
-      feature: "Seed sample and demo datasets",
-      guest: "No",
-      registered: "Yes",
-    },
-    {
-      feature: "Forecast run history",
-      guest: "No",
-      registered: "Yes",
-    },
-    {
-      feature: "File storage and quota tracking",
-      guest: "No persistent storage",
-      registered: "Yes (per-account quota)",
-    },
-    {
-      feature: "Tenant-isolated data",
-      guest: "Not applicable",
-      registered: "Yes",
-    },
+    { feature: "Upload CSV forecast runs", guest: "Yes (Try Demo)", registered: "Yes" },
+    { feature: "Save fiscal years and setup", guest: "No", registered: "Yes" },
+    { feature: "Use DB configuration pages", guest: "No", registered: "Yes" },
+    { feature: "Seed sample and demo datasets", guest: "No", registered: "Yes" },
+    { feature: "Forecast run history", guest: "No", registered: "Yes" },
+    { feature: "File storage and quota tracking", guest: "No persistent storage", registered: "Yes (per-account quota)" },
+    { feature: "Tenant-isolated data", guest: "Not applicable", registered: "Yes" },
   ];
 
   return (
     <main className="container" style={{ maxWidth: 960 }}>
-      {/* Header */}
+      {/* Block 1 — Primary CTA */}
       <div style={{ textAlign: "center", padding: "48px 0 28px" }}>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
           <FileSpreadsheet className="w-11 h-11 text-primary" />
@@ -523,34 +494,35 @@ export default function HomePage() {
         </h1>
         <p style={{ fontSize: 15, margin: "0 auto", maxWidth: 480, lineHeight: 1.6, color: "var(--color-muted-foreground)" }}>
           Monthly Fringe, Overhead, and G&amp;A projections with scenario modeling.
-          Every rate backed by pool&nbsp;÷&nbsp;base math — built for DCAA auditability.
+          Every rate backed by pool&nbsp;÷&nbsp;base math — transparent, traceable, and audit-ready.
         </p>
       </div>
 
-      {!session?.user && !loading && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "8px 14px",
-            marginBottom: 16,
-            borderRadius: 8,
-            background: "color-mix(in srgb, var(--color-primary) 10%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--color-primary) 30%, transparent)",
-            fontSize: 13,
-          }}
-        >
-          <span>Guest mode: use Try Demo to upload CSVs and run a forecast without signing in.</span>
-          <a href="/try-demo" style={{ marginLeft: "auto", fontWeight: 600, color: "var(--color-primary)" }}>
-            Try Demo
-          </a>
-          <a href="/auth/signin" style={{ fontWeight: 600, color: "var(--color-primary)" }}>
-            Sign in
-          </a>
+      {!loading && (
+        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginBottom: 28 }}>
+          {!session?.user ? (
+            <>
+              <Link href="/try-demo" className="btn btn-primary no-underline">Try Demo</Link>
+              <Link href="/auth/signin" className="btn btn-outline no-underline">Sign In</Link>
+            </>
+          ) : !hasFYs ? (
+            <>
+              <Link href="/fiscal-years" className="btn btn-primary no-underline">Create Fiscal Year</Link>
+              <button onClick={handleSeedDemo} className="btn btn-outline" disabled={seedingDemo}>
+                {seedingDemo && <Loader2 className="w-3 h-3 animate-spin inline-block mr-1" />}
+                Load Demo
+              </button>
+            </>
+          ) : (
+            <>
+              <Link href="/forecast" className="btn btn-primary no-underline">Go to Forecast</Link>
+              <Link href="/rates" className="btn btn-outline no-underline">View Rates</Link>
+            </>
+          )}
         </div>
       )}
 
+      {/* Block 2 — Status / Stats */}
       {loading && (
         <div style={{ textAlign: "center", padding: 40 }}>
           <Loader2 className="w-6 h-6 animate-spin text-primary" style={{ margin: "0 auto" }} />
@@ -604,6 +576,89 @@ export default function HomePage() {
         </section>
       )}
 
+      {!loading && dashboard && (
+        <>
+          {/* Summary Stats */}
+          {hasFYs && (
+            <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+              <StatCard label="Fiscal Years" value={dashboard.fiscal_years.length} icon={Calendar} />
+              <StatCard label="Forecast Runs" value={totalRuns} icon={TrendingUp} />
+              <StatCard label="Scenarios" value={totalScenarios} icon={GitFork} />
+              <StatCard label="GL Accounts" value={totalGL} icon={BookOpen} />
+            </div>
+          )}
+
+          {/* FY Cards */}
+          {hasFYs ? (
+            <section style={{ marginBottom: 16 }}>
+              <h2 style={{ fontSize: 16, marginBottom: 12 }}>Fiscal Years</h2>
+              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
+                {dashboard.fiscal_years.map((fy) => (
+                  <FYCard key={fy.id} fy={fy} />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section className="card" style={{ marginBottom: 16, padding: 32, textAlign: "center" }}>
+              <Database className="w-8 h-8 text-primary" style={{ margin: "0 auto 12px" }} />
+              <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Nothing here yet</h2>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 16px", maxWidth: 400, marginLeft: "auto", marginRight: "auto" }}>
+                Create a fiscal year to start forecasting, or load the demo dataset to explore the app right away.
+              </p>
+              <Link href="/fiscal-years" className="btn btn-primary no-underline">Create Fiscal Year</Link>
+            </section>
+          )}
+
+          {/* Recent Runs */}
+          <RecentRunsTable runs={dashboard.recent_runs} />
+
+          {/* Setup Checklist */}
+          <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 16 }}>Setup Checklist</h2>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {completedSetupSteps}/{setupSteps.length} done
+              </span>
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {setupSteps.map((step) => (
+                <Link key={step.title} href={step.href} className="no-underline">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "8px 10px",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                      background: step.done
+                        ? "color-mix(in srgb, var(--color-primary) 8%, transparent)"
+                        : "transparent",
+                    }}
+                  >
+                    {step.done ? (
+                      <CheckCircle2 className="w-4 h-4" style={{ color: "var(--color-primary)" }} />
+                    ) : (
+                      <step.icon className="w-4 h-4 muted" />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>{step.description}</div>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
+      {/* Block 3 — Resources & Dev Tools */}
+      <div className="muted" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center", padding: "16px 4px 4px" }}>
+        Resources &amp; Dev Tools
+      </div>
+
+      {/* How To Use IndirectRates */}
       <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
         <button
           onClick={toggleHowTo}
@@ -692,149 +747,74 @@ export default function HomePage() {
         )}
       </section>
 
-      {!loading && dashboard && (
-        <>
-          {/* Summary Stats */}
-          {hasFYs && (
-            <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-              <StatCard label="Fiscal Years" value={dashboard.fiscal_years.length} icon={Calendar} />
-              <StatCard label="Forecast Runs" value={totalRuns} icon={TrendingUp} />
-              <StatCard label="Scenarios" value={totalScenarios} icon={GitFork} />
-              <StatCard label="GL Accounts" value={totalGL} icon={BookOpen} />
+      {/* Sample & Demo Data */}
+      {session?.user && (
+        <section className="card" style={{ marginBottom: 16 }}>
+          <button
+            onClick={toggleSetup}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              width: "100%",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+              color: "inherit",
+              fontSize: 16,
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Database className="w-5 h-5" />
+              Sample &amp; Demo Data
+            </span>
+            {setupExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+
+          {setupExpanded && (
+            <div style={{ marginTop: 16 }}>
+              {/* Test Data */}
+              <div style={{ marginBottom: 16 }}>
+                <h3 style={{ margin: "0 0 4px", fontSize: 14 }}>Test Data</h3>
+                <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+                  FY2025-TEST: 20 GL accounts, Fringe/OH/G&amp;A pools, 6 months of actuals.
+                </p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={handleSeed} disabled={seeding || clearing} className="btn btn-primary" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {seeding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+                    {seeding ? "Loading..." : "Load Test Data"}
+                  </button>
+                  <button onClick={handleClear} disabled={seeding || clearing} className="btn btn-outline" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {clearing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                    {clearing ? "Clearing..." : "Clear"}
+                  </button>
+                </div>
+                <InlineNotice msg={seedMsg} />
+              </div>
+
+              {/* Demo Data */}
+              <div>
+                <h3 style={{ margin: "0 0 4px", fontSize: 14 }}>Enterprise Demo Data</h3>
+                <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+                  4 fiscal years, 30 projects, ~60 GL accounts, 48 months of actuals, budget &amp; provisional rates.
+                </p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={handleSeedDemo} disabled={seedingDemo || clearingDemo} className="btn btn-primary" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {seedingDemo ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+                    {seedingDemo ? "Loading..." : "Load Demo Data"}
+                  </button>
+                  <button onClick={handleClearDemo} disabled={seedingDemo || clearingDemo} className="btn btn-outline" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {clearingDemo ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                    {clearingDemo ? "Clearing..." : "Clear"}
+                  </button>
+                </div>
+                <InlineNotice msg={demoMsg} />
+              </div>
             </div>
           )}
-
-          {/* FY Cards */}
-          {hasFYs ? (
-            <section style={{ marginBottom: 16 }}>
-              <h2 style={{ fontSize: 16, marginBottom: 12 }}>Fiscal Years</h2>
-              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-                {dashboard.fiscal_years.map((fy) => (
-                  <FYCard key={fy.id} fy={fy} />
-                ))}
-              </div>
-            </section>
-          ) : (
-            <section className="card" style={{ marginBottom: 16, padding: 32, textAlign: "center" }}>
-              <Database className="w-8 h-8 text-primary" style={{ margin: "0 auto 12px" }} />
-              <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>Nothing here yet</h2>
-              <p className="muted" style={{ fontSize: 13, margin: "0 0 16px", maxWidth: 400, marginLeft: "auto", marginRight: "auto" }}>
-                Create a fiscal year to start forecasting, or load the demo dataset to explore the app right away.
-              </p>
-              <Link href="/fiscal-years" className="btn btn-primary no-underline">Create Fiscal Year</Link>
-            </section>
-          )}
-
-          {/* Recent Runs */}
-          <RecentRunsTable runs={dashboard.recent_runs} />
-
-          {/* Guided setup */}
-          <section className="card" style={{ marginBottom: 16, padding: "16px 20px" }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
-              <h2 style={{ margin: 0, fontSize: 16 }}>Setup Checklist</h2>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {completedSetupSteps}/{setupSteps.length} done
-              </span>
-            </div>
-            <div style={{ display: "grid", gap: 8 }}>
-              {setupSteps.map((step) => (
-                <Link key={step.title} href={step.href} className="no-underline">
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "8px 10px",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: 8,
-                      background: step.done
-                        ? "color-mix(in srgb, var(--color-primary) 8%, transparent)"
-                        : "transparent",
-                    }}
-                  >
-                    {step.done ? (
-                      <CheckCircle2 className="w-4 h-4" style={{ color: "var(--color-primary)" }} />
-                    ) : (
-                      <step.icon className="w-4 h-4 muted" />
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{step.title}</div>
-                      <div className="muted" style={{ fontSize: 12 }}>{step.description}</div>
-                    </div>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          </section>
-
-          {/* Seed Data (collapsible) */}
-          <section className="card" style={{ marginBottom: 16 }}>
-            <button
-              onClick={() => setSetupExpanded(!setupExpanded)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                width: "100%",
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: 0,
-                color: "inherit",
-                fontSize: 16,
-                fontWeight: 600,
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Database className="w-5 h-5" />
-                Sample &amp; Demo Data
-              </span>
-              {setupExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </button>
-
-            {setupExpanded && (
-              <div style={{ marginTop: 16 }}>
-                {/* Test Data */}
-                <div style={{ marginBottom: 16 }}>
-                  <h3 style={{ margin: "0 0 4px", fontSize: 14 }}>Test Data</h3>
-                  <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-                    FY2025-TEST: 20 GL accounts, Fringe/OH/G&amp;A pools, 6 months of actuals.
-                  </p>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button onClick={handleSeed} disabled={seeding || clearing} className="btn btn-primary" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {seeding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-                      {seeding ? "Loading..." : "Load Test Data"}
-                    </button>
-                    <button onClick={handleClear} disabled={seeding || clearing} className="btn btn-outline" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {clearing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                      {clearing ? "Clearing..." : "Clear"}
-                    </button>
-                  </div>
-                  <InlineNotice msg={seedMsg} />
-                </div>
-
-                {/* Demo Data */}
-                <div>
-                  <h3 style={{ margin: "0 0 4px", fontSize: 14 }}>Enterprise Demo Data</h3>
-                  <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-                    4 fiscal years, 30 projects, ~60 GL accounts, 48 months of actuals, budget &amp; provisional rates.
-                  </p>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button onClick={handleSeedDemo} disabled={seedingDemo || clearingDemo} className="btn btn-primary" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {seedingDemo ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-                      {seedingDemo ? "Loading..." : "Load Demo Data"}
-                    </button>
-                    <button onClick={handleClearDemo} disabled={seedingDemo || clearingDemo} className="btn btn-outline" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {clearingDemo ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                      {clearingDemo ? "Clearing..." : "Clear"}
-                    </button>
-                  </div>
-                  <InlineNotice msg={demoMsg} />
-                </div>
-              </div>
-            )}
-          </section>
-        </>
+        </section>
       )}
 
       {/* Chat */}
@@ -873,5 +853,3 @@ export default function HomePage() {
     </main>
   );
 }
-
-

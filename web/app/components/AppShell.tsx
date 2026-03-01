@@ -80,10 +80,11 @@ function saveSectionState(state: Record<SectionKey, boolean>) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
 }
 
-function NavLink({ item, active, collapsed }: { item: NavItem; active: boolean; collapsed: boolean }) {
+function NavLink({ item, active, collapsed, onClose }: { item: NavItem; active: boolean; collapsed: boolean; onClose?: () => void }) {
   return (
     <Link
       href={item.href}
+      onClick={onClose}
       title={collapsed ? item.label : undefined}
       className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm no-underline transition-colors ${
         collapsed ? "justify-center" : ""
@@ -106,6 +107,7 @@ function NavSection({
   onToggle,
   sidebarCollapsed,
   isActive,
+  onClose,
 }: {
   label: string;
   items: NavItem[];
@@ -113,13 +115,14 @@ function NavSection({
   onToggle: () => void;
   sidebarCollapsed: boolean;
   isActive: (href: string) => boolean;
+  onClose?: () => void;
 }) {
   if (sidebarCollapsed) {
     return (
       <>
         <div className="my-2 mx-2 border-t border-sidebar-border" />
         {items.map((item) => (
-          <NavLink key={item.href} item={item} active={isActive(item.href)} collapsed />
+          <NavLink key={item.href} item={item} active={isActive(item.href)} collapsed onClose={onClose} />
         ))}
       </>
     );
@@ -138,15 +141,65 @@ function NavSection({
       </button>
       {open &&
         items.map((item) => (
-          <NavLink key={item.href} item={item} active={isActive(item.href)} collapsed={false} />
+          <NavLink key={item.href} item={item} active={isActive(item.href)} collapsed={false} onClose={onClose} />
         ))}
     </>
+  );
+}
+
+function NavBody({
+  collapsed,
+  isActive,
+  sectionState,
+  toggleSection,
+  collapseAll,
+  allCollapsed,
+  onClose,
+}: {
+  collapsed: boolean;
+  isActive: (href: string) => boolean;
+  sectionState: Record<SectionKey, boolean>;
+  toggleSection: (key: SectionKey) => void;
+  collapseAll: () => void;
+  allCollapsed: boolean;
+  onClose?: () => void;
+}) {
+  return (
+    <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5">
+      <NavLink item={{ href: "/", label: "Home", icon: Home }} active={isActive("/")} collapsed={collapsed} onClose={onClose} />
+      <NavLink item={{ href: "/guide", label: "Guide", icon: LifeBuoy }} active={isActive("/guide")} collapsed={collapsed} onClose={onClose} />
+
+      {!collapsed && (
+        <button
+          onClick={collapseAll}
+          className="flex items-center gap-2 w-full px-3 py-1.5 mt-1 rounded-md text-[11px] bg-transparent! border-none! text-inherit! opacity-50 hover:opacity-75 hover:bg-sidebar-accent/50 transition-opacity cursor-pointer"
+          title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
+        >
+          <ChevronsDownUp className="w-3.5 h-3.5" />
+          {allCollapsed ? "Expand all" : "Collapse all"}
+        </button>
+      )}
+
+      {SECTIONS.map((section) => (
+        <NavSection
+          key={section.key}
+          label={section.label}
+          items={section.items}
+          open={sectionState[section.key]}
+          onToggle={() => toggleSection(section.key)}
+          sidebarCollapsed={collapsed}
+          isActive={isActive}
+          onClose={onClose}
+        />
+      ))}
+    </nav>
   );
 }
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [sectionState, setSectionState] = useState<Record<SectionKey, boolean>>({ settings: true, reports: true });
   const [mounted, setMounted] = useState(false);
   const { data: session } = authClient.useSession();
@@ -183,7 +236,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <header className="shrink-0 border-b border-border bg-card">
         <div className="flex items-center h-12 px-4">
           <button
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={() => {
+              if (typeof window !== "undefined" && window.innerWidth < 768) {
+                setMobileOpen((prev) => !prev);
+              } else {
+                setCollapsed((prev) => !prev);
+              }
+            }}
             className="bg-transparent! border-none! p-1.5 rounded-md hover:bg-accent transition-colors mr-3"
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-label="Toggle sidebar"
@@ -228,41 +287,51 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
+      {/* Mobile overlay drawer */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-50 md:hidden" aria-modal="true" role="dialog">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
+          <aside className="absolute inset-y-0 left-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col overflow-y-auto shadow-xl">
+            <div className="flex items-center h-12 px-3 border-b border-sidebar-border shrink-0">
+              <button
+                onClick={() => setMobileOpen(false)}
+                className="bg-transparent! border-none! p-1.5 rounded-md hover:bg-accent transition-colors"
+              >
+                <PanelLeftClose className="w-4 h-4 text-muted-foreground" />
+              </button>
+              <Link href="/" className="no-underline flex items-center gap-2 ml-2" onClick={() => setMobileOpen(false)}>
+                <FileSpreadsheet className="w-5 h-5 text-primary" />
+                <span className="text-sm font-bold tracking-tight">IndirectRates</span>
+              </Link>
+            </div>
+            <NavBody
+              collapsed={false}
+              isActive={isActive}
+              sectionState={sectionState}
+              toggleSection={toggleSection}
+              collapseAll={collapseAll}
+              allCollapsed={allCollapsed}
+              onClose={() => setMobileOpen(false)}
+            />
+          </aside>
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
+        {/* Desktop sidebar */}
         <aside
-          className={`shrink-0 border-r border-border bg-sidebar text-sidebar-foreground flex flex-col overflow-y-auto transition-[width] duration-200 ${
+          className={`hidden md:flex flex-col shrink-0 border-r border-border bg-sidebar text-sidebar-foreground overflow-y-auto transition-[width] duration-200 ${
             collapsed ? "w-14" : "w-52"
           }`}
         >
-          <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5">
-            <NavLink item={{ href: "/", label: "Home", icon: Home }} active={isActive("/")} collapsed={collapsed} />
-            <NavLink item={{ href: "/guide", label: "Guide", icon: LifeBuoy }} active={isActive("/guide")} collapsed={collapsed} />
-
-            {!collapsed && (
-              <button
-                onClick={collapseAll}
-                className="flex items-center gap-2 w-full px-3 py-1.5 mt-1 rounded-md text-[11px] bg-transparent! border-none! text-inherit! opacity-50 hover:opacity-75 hover:bg-sidebar-accent/50 transition-opacity cursor-pointer"
-                title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
-              >
-                <ChevronsDownUp className="w-3.5 h-3.5" />
-                {allCollapsed ? "Expand all" : "Collapse all"}
-              </button>
-            )}
-
-            {SECTIONS.map((section) => (
-              <NavSection
-                key={section.key}
-                label={section.label}
-                items={section.items}
-                open={sectionState[section.key]}
-                onToggle={() => toggleSection(section.key)}
-                sidebarCollapsed={collapsed}
-                isActive={isActive}
-              />
-            ))}
-          </nav>
-
+          <NavBody
+            collapsed={collapsed}
+            isActive={isActive}
+            sectionState={sectionState}
+            toggleSection={toggleSection}
+            collapseAll={collapseAll}
+            allCollapsed={allCollapsed}
+          />
         </aside>
 
         {/* Main content */}
